@@ -1,0 +1,4 @@
+# Copy to .dev.vars for local `npm run dev:worker`.
+# In production set these with: npx wrangler secret put SITE_PASSWORD (etc.)
+SITE_PASSWORD=change-me
+SESSION_SECRET=any-long-random-string

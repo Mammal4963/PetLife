@@ -1,0 +1,23 @@
+{
+  // Cloudflare Workers config. Deploy steps are in README.md.
+  "name": "petlife",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-08-01",
+  "assets": {
+    "directory": "public"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "petlife",
+      // Replace with the database_id printed by: npx wrangler d1 create petlife
+      "database_id": "00000000-0000-0000-0000-000000000000"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "MEDIA",
+      "bucket_name": "petlife-media"
+    }
+  ]
+}

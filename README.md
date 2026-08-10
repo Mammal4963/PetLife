@@ -20,7 +20,39 @@ and important-date reminders. Built for Umi, Goochi, and in loving memory of Cho
   birthdays, gotcha-day anniversaries, and any custom important dates
   (one-time or yearly).
 
-## Running it
+## Two ways to run it
+
+The site has **one frontend and two interchangeable backends** that speak the
+same API:
+
+1. **Cloudflare Workers** (`worker/` + `wrangler.jsonc`) — serverless, free
+   tier, no machine to maintain. Database is Cloudflare D1 (SQLite), media
+   lives in R2 and is served through the Worker so it stays password-gated.
+2. **Node.js self-hosted** (`server.js` + `src/`) — Express + SQLite on any
+   machine (a Raspberry Pi is plenty). This is the escape hatch: the code is
+   already here and maintained, so leaving Cloudflare later is a data export,
+   not a rewrite.
+
+### Deploying to Cloudflare (current setup)
+
+```bash
+npm install
+npx wrangler login                       # opens browser, one time
+npx wrangler d1 create petlife           # copy the printed database_id
+#   → paste it into wrangler.jsonc (d1_databases[0].database_id)
+npx wrangler r2 bucket create petlife-media
+npm run db:migrate                       # creates the tables in D1
+npx wrangler secret put SITE_PASSWORD    # the shared family password
+npx wrangler secret put SESSION_SECRET   # any long random string
+npm run deploy                           # → https://petlife.<your-subdomain>.workers.dev
+```
+
+Free-tier headroom: 100k requests/day, 5 GB D1, 10 GB R2 — a family photo
+site won't dent any of it. To develop locally against a simulated
+Cloudflare: copy `.dev.vars.example` to `.dev.vars`, run
+`npm run db:migrate:local`, then `npm run dev:worker`.
+
+### Running self-hosted instead (the Pi plan)
 
 ```bash
 npm install
@@ -30,7 +62,14 @@ npm start           # http://localhost:3000
 Everything is stored in the `data/` folder (SQLite database + uploaded files),
 so backing up the site is just copying that one folder.
 
-## Configuration (all optional, via environment variables)
+**Moving off Cloudflare later:** export the database with
+`npx wrangler d1 export petlife --remote --output=dump.sql`, import it into
+`data/petlife.db` with the `sqlite3` CLI, download the R2 bucket's objects
+into `data/uploads/` (rclone or `wrangler r2 object get`), and `npm start`.
+The media URLs in the database (`/media/...`) are the same in both backends,
+so no rewriting is needed.
+
+## Configuration for self-hosting (all optional, via environment variables)
 
 | Variable | What it does |
 | --- | --- |
@@ -71,5 +110,8 @@ The site extracts the video ID and embeds the privacy-enhanced
 
 ## Tech
 
-Node.js + Express + SQLite (via better-sqlite3), vanilla JS frontend with no
-build step. Runs anywhere Node 18+ runs — a Raspberry Pi is plenty.
+Vanilla JS frontend with no build step, shared by both backends:
+
+- **Workers backend**: Hono + D1 + R2 bindings (`worker/`)
+- **Node backend**: Express + better-sqlite3 + local disk or R2 via S3 API
+  (`server.js`, `src/`) — runs anywhere Node 18+ runs; a Raspberry Pi is plenty.
