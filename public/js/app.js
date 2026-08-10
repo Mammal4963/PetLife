@@ -50,6 +50,24 @@ function toast(msg, isError = false) {
   setTimeout(() => el.remove(), 3500);
 }
 
+// ------------------------------------------------------------------- theme
+
+const $themeToggle = document.getElementById('theme-toggle');
+function currentTheme() {
+  return document.documentElement.dataset.theme ||
+    (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+}
+function updateThemeIcon() {
+  $themeToggle.textContent = currentTheme() === 'dark' ? '☀️' : '🌙';
+}
+$themeToggle.addEventListener('click', () => {
+  const next = currentTheme() === 'dark' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = next;
+  localStorage.setItem('pl_theme', next);
+  updateThemeIcon();
+});
+updateThemeIcon();
+
 // ------------------------------------------------------------------- login
 
 function showLogin() {
@@ -212,7 +230,8 @@ async function openPostForm(defaultPetIds = []) {
 
   const modal = openModal('New timeline post', `
     <form class="stack" id="post-form">
-      <label class="field"><span>Date</span><input type="date" name="post_date" value="${today()}" required></label>
+      <label class="field"><span>Date</span><input type="date" name="post_date" value="${today()}" required>
+        <small id="date-hint"></small></label>
       <label class="field"><span>Title (optional)</span><input type="text" name="title" placeholder="First day home!"></label>
       <label class="field"><span>What happened?</span><textarea name="body" rows="3" placeholder="Tell the story…"></textarea></label>
       <div class="field"><span>Who's in it?</span><div class="checks">${petChecks || '<em>Add a pet first to tag them</em>'}</div></div>
@@ -231,10 +250,24 @@ async function openPostForm(defaultPetIds = []) {
   const preview = modal.querySelector('#photo-preview');
   let compressed = [];
 
+  const dateInput = form.elements.post_date;
+  const dateHint = modal.querySelector('#date-hint');
+  let dateTouched = false;
+  dateInput.addEventListener('input', () => { dateTouched = true; dateHint.textContent = ''; });
+
   fileInput.addEventListener('change', async () => {
     preview.innerHTML = '<em>Compressing photos…</em>';
     compressed = [];
-    for (const file of fileInput.files) {
+    const files = [...fileInput.files];
+    // Date the post to when the photos were taken, unless the user already picked a date.
+    const dates = (await Promise.all(files.map(readPhotoDate))).filter(Boolean).sort();
+    if (dates.length && !dateTouched) {
+      dateInput.value = dates[0];
+      dateHint.textContent = dates[0] === dates[dates.length - 1]
+        ? "📷 Date set from the photos' date taken"
+        : `📷 Photos span ${fmtDate(dates[0])} – ${fmtDate(dates[dates.length - 1])}; using the earliest`;
+    }
+    for (const file of files) {
       compressed.push(await compressImage(file));
     }
     preview.innerHTML = compressed.map((f) =>
