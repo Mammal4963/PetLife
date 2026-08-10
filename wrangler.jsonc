@@ -10,8 +10,7 @@
     {
       "binding": "DB",
       "database_name": "petlife",
-      // Replace with the database_id printed by: npx wrangler d1 create petlife
-      "database_id": "00000000-0000-0000-0000-000000000000"
+      "database_id": "ef0d9d00-d8cd-4765-979f-d8a0f6b0b527"
     }
   ],
   "r2_buckets": [
