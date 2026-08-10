@@ -1,0 +1,627 @@
+/* PetLife frontend — no build step, just fetch + templates. */
+
+const $app = document.getElementById('app');
+const $modalRoot = document.getElementById('modal-root');
+
+// ---------------------------------------------------------------- utilities
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+function fmtDate(iso) {
+  if (!iso) return '';
+  const [y, m, d] = iso.split('-').map(Number);
+  if (!y || !m || !d) return iso;
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+function today() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+async function api(url, opts = {}) {
+  const res = await fetch(url, opts);
+  if (res.status === 401) {
+    showLogin();
+    throw new Error('unauthorized');
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Request failed');
+  return data;
+}
+
+const getJSON = (url) => api(url);
+const postJSON = (url, body) => api(url, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(body),
+});
+const del = (url) => api(url, { method: 'DELETE' });
+
+function toast(msg, isError = false) {
+  const el = document.createElement('div');
+  el.className = 'toast' + (isError ? ' error-toast' : '');
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 3500);
+}
+
+// ------------------------------------------------------------------- login
+
+function showLogin() {
+  document.getElementById('login-overlay').classList.remove('hidden');
+}
+
+document.getElementById('login-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const password = document.getElementById('login-password').value;
+  try {
+    await api('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    });
+    document.getElementById('login-overlay').classList.add('hidden');
+    route();
+  } catch (err) {
+    document.getElementById('login-error').textContent = err.message;
+  }
+});
+
+// ------------------------------------------------------------------ modals
+
+function openModal(title, bodyHtml) {
+  $modalRoot.innerHTML = `
+    <div class="modal-backdrop">
+      <div class="modal card">
+        <div class="modal-head">
+          <h2>${esc(title)}</h2>
+          <button class="icon-btn" data-close>✕</button>
+        </div>
+        <div class="modal-body">${bodyHtml}</div>
+      </div>
+    </div>`;
+  const backdrop = $modalRoot.querySelector('.modal-backdrop');
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop || e.target.hasAttribute('data-close')) closeModal();
+  });
+  return $modalRoot.querySelector('.modal');
+}
+
+function closeModal() {
+  $modalRoot.innerHTML = '';
+}
+
+// Generic small-form modal. fields: {name, label, type, options?, value?, required?, placeholder?}
+function openForm(title, fields, onSubmit, submitLabel = 'Save') {
+  const inputs = fields.map((f) => {
+    const val = esc(f.value ?? '');
+    const req = f.required ? 'required' : '';
+    let control;
+    if (f.type === 'textarea') {
+      control = `<textarea name="${f.name}" rows="3" ${req} placeholder="${esc(f.placeholder || '')}">${val}</textarea>`;
+    } else if (f.type === 'select') {
+      control = `<select name="${f.name}">${f.options.map((o) =>
+        `<option value="${esc(o.value)}" ${String(o.value) === String(f.value) ? 'selected' : ''}>${esc(o.label)}</option>`).join('')}</select>`;
+    } else {
+      control = `<input type="${f.type || 'text'}" name="${f.name}" value="${val}" ${req} placeholder="${esc(f.placeholder || '')}">`;
+    }
+    return `<label class="field"><span>${esc(f.label)}</span>${control}</label>`;
+  }).join('');
+
+  const modal = openModal(title, `
+    <form class="stack">
+      ${inputs}
+      <p class="error form-error"></p>
+      <button type="submit" class="btn primary">${esc(submitLabel)}</button>
+    </form>`);
+
+  modal.querySelector('form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const data = Object.fromEntries(new FormData(e.target).entries());
+    const btn = e.target.querySelector('button[type=submit]');
+    btn.disabled = true;
+    try {
+      await onSubmit(data);
+      closeModal();
+    } catch (err) {
+      e.target.querySelector('.form-error').textContent = err.message;
+      btn.disabled = false;
+    }
+  });
+}
+
+// ---------------------------------------------------------------- lightbox
+
+const $lightbox = document.getElementById('lightbox');
+$lightbox.addEventListener('click', () => $lightbox.classList.add('hidden'));
+document.body.addEventListener('click', (e) => {
+  const img = e.target.closest('[data-lightbox]');
+  if (img) {
+    $lightbox.querySelector('img').src = img.dataset.lightbox;
+    $lightbox.classList.remove('hidden');
+  }
+});
+
+// ------------------------------------------------------------- shared bits
+
+let petsCache = null;
+async function loadPets(force = false) {
+  if (!petsCache || force) petsCache = await getJSON('/api/pets');
+  return petsCache;
+}
+
+function petAvatar(pet, size = '') {
+  const memorial = pet.passed_date ? '<span class="memorial-badge" title="In loving memory">🌈</span>' : '';
+  if (pet.photo_url) {
+    return `<span class="avatar ${size}">${memorial}<img src="${esc(pet.photo_url)}" alt="${esc(pet.name)}"></span>`;
+  }
+  const emoji = pet.species === 'dog' ? '🐶' : pet.species === 'cat' ? '🐱' : '🐾';
+  return `<span class="avatar ${size}">${memorial}<span class="avatar-emoji">${emoji}</span></span>`;
+}
+
+function youtubeEmbed(id) {
+  return `<div class="video-wrap"><iframe src="https://www.youtube-nocookie.com/embed/${esc(id)}"
+    title="YouTube video" frameborder="0" loading="lazy"
+    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+    allowfullscreen></iframe></div>`;
+}
+
+function postCard(post, { showDelete = true } = {}) {
+  const petChips = post.pets.map((p) => `<a class="chip" href="#/pet/${p.id}">${esc(p.name)}</a>`).join('');
+  const photos = post.media.length ? `
+    <div class="photo-grid n${Math.min(post.media.length, 4)}">
+      ${post.media.map((m) => `<img src="${esc(m.url)}" data-lightbox="${esc(m.url)}" loading="lazy" alt="">`).join('')}
+    </div>` : '';
+  return `
+    <article class="card post" data-post-id="${post.id}">
+      <div class="post-head">
+        <div>
+          <time>${fmtDate(post.post_date)}</time>
+          ${post.title ? `<h3>${esc(post.title)}</h3>` : ''}
+        </div>
+        ${showDelete ? `<button class="icon-btn subtle" data-del-post="${post.id}" title="Delete post">🗑</button>` : ''}
+      </div>
+      ${post.body ? `<p class="post-body">${esc(post.body).replace(/\n/g, '<br>')}</p>` : ''}
+      ${photos}
+      ${post.youtube_id ? youtubeEmbed(post.youtube_id) : ''}
+      ${petChips ? `<div class="chips">${petChips}</div>` : ''}
+    </article>`;
+}
+
+document.body.addEventListener('click', async (e) => {
+  const delBtn = e.target.closest('[data-del-post]');
+  if (delBtn && confirm('Delete this post? Its photos will be removed too.')) {
+    await del(`/api/posts/${delBtn.dataset.delPost}`);
+    delBtn.closest('article').remove();
+    toast('Post deleted');
+  }
+});
+
+// ----------------------------------------------------------------- new post
+
+async function openPostForm(defaultPetIds = []) {
+  const pets = await loadPets();
+  const petChecks = pets.filter((p) => !p.passed_date || defaultPetIds.includes(p.id)).map((p) => `
+    <label class="check"><input type="checkbox" name="pet_ids" value="${p.id}"
+      ${defaultPetIds.includes(p.id) || (defaultPetIds.length === 0 && !p.passed_date) ? 'checked' : ''}> ${esc(p.name)}</label>`).join('');
+
+  const modal = openModal('New timeline post', `
+    <form class="stack" id="post-form">
+      <label class="field"><span>Date</span><input type="date" name="post_date" value="${today()}" required></label>
+      <label class="field"><span>Title (optional)</span><input type="text" name="title" placeholder="First day home!"></label>
+      <label class="field"><span>What happened?</span><textarea name="body" rows="3" placeholder="Tell the story…"></textarea></label>
+      <div class="field"><span>Who's in it?</span><div class="checks">${petChecks || '<em>Add a pet first to tag them</em>'}</div></div>
+      <label class="field"><span>Photos</span><input type="file" name="photos" accept="image/*" multiple></label>
+      <div id="photo-preview" class="preview-row"></div>
+      <label class="field"><span>YouTube link (optional)</span>
+        <input type="url" name="youtube_url" placeholder="https://youtu.be/…">
+        <small>Upload videos to your unlisted YouTube channel from your phone, then paste the link here — free hosting forever.</small>
+      </label>
+      <p class="error form-error"></p>
+      <button type="submit" class="btn primary">Post it 🐾</button>
+    </form>`);
+
+  const form = modal.querySelector('#post-form');
+  const fileInput = form.querySelector('input[name=photos]');
+  const preview = modal.querySelector('#photo-preview');
+  let compressed = [];
+
+  fileInput.addEventListener('change', async () => {
+    preview.innerHTML = '<em>Compressing photos…</em>';
+    compressed = [];
+    for (const file of fileInput.files) {
+      compressed.push(await compressImage(file));
+    }
+    preview.innerHTML = compressed.map((f) =>
+      `<span class="preview-chip">📷 ${esc(f.name)} <small>${(f.size / 1024).toFixed(0)} KB</small></span>`).join('');
+  });
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = form.querySelector('button[type=submit]');
+    btn.disabled = true;
+    btn.textContent = 'Posting…';
+    try {
+      const fd = new FormData();
+      for (const name of ['post_date', 'title', 'body', 'youtube_url']) fd.append(name, form.elements[name].value);
+      form.querySelectorAll('input[name=pet_ids]:checked').forEach((c) => fd.append('pet_ids', c.value));
+      for (const f of compressed) fd.append('photos', f, f.name);
+      await api('/api/posts', { method: 'POST', body: fd });
+      closeModal();
+      toast('Posted! 🎉');
+      route();
+    } catch (err) {
+      form.querySelector('.form-error').textContent = err.message;
+      btn.disabled = false;
+      btn.textContent = 'Post it 🐾';
+    }
+  });
+}
+
+// ----------------------------------------------------------------- pet form
+
+function openPetForm(pet = null) {
+  const modal = openModal(pet ? `Edit ${pet.name}` : 'Add a pet', `
+    <form class="stack" id="pet-form">
+      <label class="field"><span>Name</span><input type="text" name="name" value="${esc(pet?.name || '')}" required></label>
+      <div class="two-col">
+        <label class="field"><span>Species</span>
+          <select name="species">
+            ${['cat', 'dog', 'other'].map((s) => `<option value="${s}" ${(pet?.species || 'cat') === s ? 'selected' : ''}>${s}</option>`).join('')}
+          </select></label>
+        <label class="field"><span>Sex</span>
+          <select name="sex">
+            <option value="" ${!pet?.sex ? 'selected' : ''}>—</option>
+            ${['male', 'female'].map((s) => `<option value="${s}" ${pet?.sex === s ? 'selected' : ''}>${s}</option>`).join('')}
+          </select></label>
+      </div>
+      <div class="two-col">
+        <label class="field"><span>Birthdate (or best guess)</span><input type="date" name="birthdate" value="${esc(pet?.birthdate || '')}"></label>
+        <label class="field"><span>Adopted / Gotcha day</span><input type="date" name="adopted_date" value="${esc(pet?.adopted_date || '')}"></label>
+      </div>
+      <label class="field"><span>Passed away (leave blank if with us)</span><input type="date" name="passed_date" value="${esc(pet?.passed_date || '')}"></label>
+      <label class="field"><span>Breed</span><input type="text" name="breed" value="${esc(pet?.breed || '')}"></label>
+      <label class="field"><span>Notes</span><textarea name="notes" rows="2">${esc(pet?.notes || '')}</textarea></label>
+      <label class="field"><span>Photo</span><input type="file" name="photo" accept="image/*"></label>
+      <p class="error form-error"></p>
+      <button type="submit" class="btn primary">${pet ? 'Save changes' : 'Add pet'}</button>
+    </form>`);
+
+  const form = modal.querySelector('#pet-form');
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = form.querySelector('button[type=submit]');
+    btn.disabled = true;
+    try {
+      const fd = new FormData();
+      for (const name of ['name', 'species', 'sex', 'birthdate', 'adopted_date', 'passed_date', 'breed', 'notes']) {
+        fd.append(name, form.elements[name].value);
+      }
+      const photo = form.elements.photo.files[0];
+      if (photo) {
+        const small = await compressImage(photo, 1200);
+        fd.append('photo', small, small.name);
+      }
+      await api(pet ? `/api/pets/${pet.id}` : '/api/pets', { method: pet ? 'PUT' : 'POST', body: fd });
+      await loadPets(true);
+      closeModal();
+      toast(pet ? 'Saved' : 'Welcome to the family! 🐾');
+      route();
+    } catch (err) {
+      form.querySelector('.form-error').textContent = err.message;
+      btn.disabled = false;
+    }
+  });
+}
+
+// -------------------------------------------------------------------- home
+
+async function renderHome() {
+  const [pets, reminders, posts] = await Promise.all([
+    loadPets(true),
+    getJSON('/api/reminders'),
+    getJSON('/api/posts'),
+  ]);
+
+  const petCards = pets.map((p) => `
+    <a class="pet-tile ${p.passed_date ? 'memorial' : ''}" href="#/pet/${p.id}">
+      ${petAvatar(p, 'lg')}
+      <strong>${esc(p.name)}</strong>
+      ${p.passed_date ? `<small>In loving memory</small>` : ''}
+    </a>`).join('');
+
+  const reminderItems = reminders.length ? reminders.map((r) => `
+    <li class="${r.days < 0 ? 'overdue' : ''}">
+      <span class="rem-when">${r.days < 0 ? `${-r.days}d overdue` : r.days === 0 ? 'Today!' : `in ${r.days}d`}</span>
+      <span>${esc(r.title)}</span>
+      <time>${fmtDate(r.date)}</time>
+    </li>`).join('') : '<li class="empty">Nothing coming up. Enjoy the calm 😌</li>';
+
+  const recent = posts.slice(0, 3).map((p) => postCard(p, { showDelete: false })).join('');
+
+  $app.innerHTML = `
+    <section class="hero">
+      <h1>The Family</h1>
+      <div class="pet-row">${petCards}
+        <button class="pet-tile add-tile" id="add-pet">＋<small>Add a pet</small></button>
+      </div>
+    </section>
+    <div class="home-grid">
+      <section class="card">
+        <div class="section-head"><h2>📅 Coming up</h2>
+          <button class="btn small" id="add-date">+ Important date</button></div>
+        <ul class="reminder-list">${reminderItems}</ul>
+      </section>
+      <section>
+        <div class="section-head"><h2>🕰 Latest memories</h2>
+          <button class="btn primary small" id="new-post">+ New post</button></div>
+        ${recent || '<p class="empty card">No posts yet — share your first memory!</p>'}
+        ${posts.length ? '<a class="see-all" href="#/timeline">See the whole timeline →</a>' : ''}
+      </section>
+    </div>`;
+
+  document.getElementById('add-pet').onclick = () => openPetForm();
+  document.getElementById('new-post').onclick = () => openPostForm();
+  document.getElementById('add-date').onclick = () => openForm('Add an important date', [
+    { name: 'title', label: 'What is it?', required: true, placeholder: 'Neuter appointment' },
+    { name: 'event_date', label: 'Date', type: 'date', required: true },
+    {
+      name: 'pet_id', label: 'Pet (optional)', type: 'select',
+      options: [{ value: '', label: '— whole family —' }, ...pets.map((p) => ({ value: p.id, label: p.name }))],
+    },
+    {
+      name: 'recurring', label: 'Repeats every year?', type: 'select',
+      options: [{ value: '', label: 'No, one time' }, { value: '1', label: 'Yes, yearly' }],
+    },
+  ], async (data) => {
+    await postJSON('/api/important-dates', { ...data, pet_id: data.pet_id || null, recurring: Boolean(data.recurring) });
+    toast('Date saved');
+    route();
+  });
+}
+
+// ---------------------------------------------------------------- timeline
+
+async function renderTimeline(petId = null) {
+  const pets = await loadPets();
+  const posts = await getJSON('/api/posts' + (petId ? `?pet_id=${petId}` : ''));
+
+  const filters = `
+    <div class="chips filter-chips">
+      <a class="chip ${!petId ? 'active' : ''}" href="#/timeline">Everyone</a>
+      ${pets.map((p) => `<a class="chip ${String(petId) === String(p.id) ? 'active' : ''}" href="#/timeline/${p.id}">${esc(p.name)}</a>`).join('')}
+    </div>`;
+
+  $app.innerHTML = `
+    <section>
+      <div class="section-head"><h1>Timeline</h1>
+        <button class="btn primary" id="new-post">+ New post</button></div>
+      ${filters}
+      <div class="timeline">
+        ${posts.map((p) => postCard(p)).join('') ||
+          '<p class="empty card">No memories here yet. Time to make some! 📸</p>'}
+      </div>
+    </section>`;
+  document.getElementById('new-post').onclick = () => openPostForm(petId ? [Number(petId)] : []);
+}
+
+// -------------------------------------------------------------------- pets
+
+async function renderPets() {
+  const pets = await loadPets(true);
+  $app.innerHTML = `
+    <section>
+      <div class="section-head"><h1>Our Pets</h1>
+        <button class="btn primary" id="add-pet">+ Add a pet</button></div>
+      <div class="pet-grid">
+        ${pets.map((p) => `
+          <a class="card pet-card ${p.passed_date ? 'memorial' : ''}" href="#/pet/${p.id}">
+            ${petAvatar(p, 'lg')}
+            <div>
+              <h3>${esc(p.name)}</h3>
+              <p class="muted">${esc([p.sex, p.breed || p.species].filter(Boolean).join(' · '))}</p>
+              ${p.passed_date ? `<p class="memorial-note">🌈 ${fmtDate(p.passed_date)} — forever loved</p>`
+                : p.birthdate ? `<p class="muted">Born ${fmtDate(p.birthdate)}</p>` : ''}
+            </div>
+          </a>`).join('') || '<p class="empty card">No pets yet — add your crew!</p>'}
+      </div>
+    </section>`;
+  document.getElementById('add-pet').onclick = () => openPetForm();
+}
+
+// --------------------------------------------------------------- pet detail
+
+function medTable(title, emoji, rows, cols, addLabel, onAdd, delType) {
+  const header = cols.map((c) => `<th>${esc(c.label)}</th>`).join('');
+  const body = rows.map((r) => `
+    <tr>${cols.map((c) => `<td>${esc(c.fmt ? c.fmt(r[c.key], r) : r[c.key] ?? '')}</td>`).join('')}
+      <td class="row-actions"><button class="icon-btn subtle" data-del="${delType}:${r.id}" title="Delete">🗑</button></td></tr>`).join('');
+  return `
+    <section class="card med-section">
+      <div class="section-head"><h3>${emoji} ${esc(title)}</h3>
+        <button class="btn small" data-add="${onAdd}">+ ${esc(addLabel)}</button></div>
+      ${rows.length ? `<div class="table-wrap"><table><thead><tr>${header}<th></th></tr></thead><tbody>${body}</tbody></table></div>`
+        : `<p class="empty">Nothing recorded yet.</p>`}
+    </section>`;
+}
+
+async function renderPetDetail(id) {
+  let pet;
+  try {
+    pet = await getJSON(`/api/pets/${id}`);
+  } catch {
+    $app.innerHTML = '<p class="empty card">Pet not found.</p>';
+    return;
+  }
+
+  const facts = [
+    pet.birthdate && `🎂 Born ${fmtDate(pet.birthdate)}`,
+    pet.adopted_date && `🏡 Gotcha day ${fmtDate(pet.adopted_date)}`,
+    pet.passed_date && `🌈 Crossed the rainbow bridge ${fmtDate(pet.passed_date)}`,
+    pet.breed && `🧬 ${pet.breed}`,
+    pet.sex && (pet.sex === 'male' ? '♂ Male' : '♀ Female'),
+  ].filter(Boolean).map((f) => `<span class="fact">${esc(f)}</span>`).join('');
+
+  $app.innerHTML = `
+    <section class="pet-header card ${pet.passed_date ? 'memorial' : ''}">
+      ${petAvatar(pet, 'xl')}
+      <div class="pet-header-info">
+        <h1>${esc(pet.name)} ${pet.passed_date ? '🌈' : ''}</h1>
+        <div class="facts">${facts}</div>
+        ${pet.notes ? `<p class="muted">${esc(pet.notes)}</p>` : ''}
+        <div class="btn-row">
+          <a class="btn small" href="#/timeline/${pet.id}">View timeline</a>
+          <button class="btn small" id="edit-pet">Edit</button>
+          <button class="btn small danger" id="delete-pet">Remove</button>
+        </div>
+      </div>
+    </section>
+
+    ${medTable('Vaccinations', '💉', pet.vaccinations, [
+      { key: 'name', label: 'Vaccine' },
+      { key: 'date_given', label: 'Given', fmt: fmtDate },
+      { key: 'due_date', label: 'Next due', fmt: (v) => v ? fmtDate(v) : '' },
+      { key: 'notes', label: 'Notes' },
+    ], 'Add vaccine', 'vaccination', 'vaccinations')}
+
+    ${medTable('Vet visits', '🩺', pet.visits, [
+      { key: 'visit_date', label: 'Date', fmt: fmtDate },
+      { key: 'reason', label: 'Reason' },
+      { key: 'vet_name', label: 'Vet' },
+      { key: 'notes', label: 'Notes' },
+    ], 'Add visit', 'visit', 'visits')}
+
+    ${medTable('Medications', '💊', pet.medications, [
+      { key: 'name', label: 'Medication' },
+      { key: 'dose', label: 'Dose' },
+      { key: 'frequency', label: 'How often' },
+      { key: 'start_date', label: 'Started', fmt: fmtDate },
+      { key: 'end_date', label: 'Ends', fmt: (v) => v ? fmtDate(v) : 'ongoing' },
+    ], 'Add medication', 'medication', 'medications')}
+
+    ${medTable('Weight log', '⚖️', pet.weights, [
+      { key: 'weigh_date', label: 'Date', fmt: fmtDate },
+      { key: 'weight', label: 'Weight', fmt: (v, r) => `${v} ${r.unit}` },
+    ], 'Add weight', 'weight', 'weights')}
+
+    <section class="card med-section">
+      <div class="section-head"><h3>📄 Documents</h3>
+        <button class="btn small" data-add="document">+ Upload</button></div>
+      ${pet.documents.length ? `<ul class="doc-list">${pet.documents.map((d) => `
+        <li><a href="${esc(d.url)}" target="_blank" rel="noopener">📎 ${esc(d.title)}</a>
+          ${d.doc_date ? `<time>${fmtDate(d.doc_date)}</time>` : ''}
+          <button class="icon-btn subtle" data-del="documents:${d.id}" title="Delete">🗑</button></li>`).join('')}</ul>`
+        : '<p class="empty">No documents yet — vet records, adoption papers, anything.</p>'}
+    </section>`;
+
+  document.getElementById('edit-pet').onclick = () => openPetForm(pet);
+  document.getElementById('delete-pet').onclick = async () => {
+    if (!confirm(`Remove ${pet.name} and all their records? This can't be undone.`)) return;
+    await del(`/api/pets/${pet.id}`);
+    await loadPets(true);
+    toast(`${pet.name} removed`);
+    location.hash = '#/pets';
+  };
+
+  const refresh = () => renderPetDetail(id);
+
+  $app.querySelectorAll('[data-del]').forEach((btn) => {
+    btn.onclick = async () => {
+      if (!confirm('Delete this entry?')) return;
+      const [type, entryId] = btn.dataset.del.split(':');
+      await del(`/api/${type}/${entryId}`);
+      refresh();
+    };
+  });
+
+  const addForms = {
+    vaccination: () => openForm(`Add vaccine for ${pet.name}`, [
+      { name: 'name', label: 'Vaccine', required: true, placeholder: 'FVRCP booster' },
+      { name: 'date_given', label: 'Date given', type: 'date' },
+      { name: 'due_date', label: 'Next due (sets a reminder)', type: 'date' },
+      { name: 'notes', label: 'Notes', type: 'textarea' },
+    ], async (d) => { await postJSON(`/api/pets/${id}/vaccinations`, d); refresh(); }),
+    visit: () => openForm(`Add vet visit for ${pet.name}`, [
+      { name: 'visit_date', label: 'Date', type: 'date', required: true, value: today() },
+      { name: 'reason', label: 'Reason', placeholder: 'Kitten checkup' },
+      { name: 'vet_name', label: 'Vet / clinic' },
+      { name: 'notes', label: 'Notes', type: 'textarea' },
+    ], async (d) => { await postJSON(`/api/pets/${id}/visits`, d); refresh(); }),
+    medication: () => openForm(`Add medication for ${pet.name}`, [
+      { name: 'name', label: 'Medication', required: true },
+      { name: 'dose', label: 'Dose', placeholder: '2.5 mg' },
+      { name: 'frequency', label: 'How often', placeholder: 'Twice daily' },
+      { name: 'start_date', label: 'Start date', type: 'date' },
+      { name: 'end_date', label: 'End date (blank = ongoing)', type: 'date' },
+    ], async (d) => { await postJSON(`/api/pets/${id}/medications`, d); refresh(); }),
+    weight: () => openForm(`Log weight for ${pet.name}`, [
+      { name: 'weigh_date', label: 'Date', type: 'date', required: true, value: today() },
+      { name: 'weight', label: 'Weight', type: 'number', required: true, placeholder: '8.2' },
+      { name: 'unit', label: 'Unit', type: 'select', options: [{ value: 'lb', label: 'lb' }, { value: 'kg', label: 'kg' }] },
+    ], async (d) => { await postJSON(`/api/pets/${id}/weights`, d); refresh(); }),
+    document: () => {
+      const modal = openModal(`Upload document for ${pet.name}`, `
+        <form class="stack" id="doc-form">
+          <label class="field"><span>Title</span><input type="text" name="title" placeholder="Rabies certificate"></label>
+          <label class="field"><span>Date</span><input type="date" name="doc_date"></label>
+          <label class="field"><span>File (PDF or photo)</span><input type="file" name="file" required accept="image/*,.pdf"></label>
+          <p class="error form-error"></p>
+          <button type="submit" class="btn primary">Upload</button>
+        </form>`);
+      modal.querySelector('#doc-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        try {
+          const fd = new FormData();
+          fd.append('title', e.target.elements.title.value);
+          fd.append('doc_date', e.target.elements.doc_date.value);
+          let file = e.target.elements.file.files[0];
+          if (file && file.type.startsWith('image/')) file = await compressImage(file);
+          fd.append('file', file, file.name);
+          await api(`/api/pets/${id}/documents`, { method: 'POST', body: fd });
+          closeModal();
+          refresh();
+        } catch (err) {
+          e.target.querySelector('.form-error').textContent = err.message;
+        }
+      });
+    },
+  };
+  $app.querySelectorAll('[data-add]').forEach((btn) => {
+    btn.onclick = addForms[btn.dataset.add];
+  });
+}
+
+// ------------------------------------------------------------------ router
+
+async function route() {
+  const hash = location.hash.replace(/^#\/?/, '');
+  const [page, arg] = hash.split('/');
+  document.querySelectorAll('[data-nav]').forEach((a) => {
+    a.classList.toggle('active', a.dataset.nav === (page || 'home') ||
+      (a.dataset.nav === 'pets' && page === 'pet'));
+  });
+  try {
+    if (page === 'timeline') await renderTimeline(arg || null);
+    else if (page === 'pets') await renderPets();
+    else if (page === 'pet' && arg) await renderPetDetail(arg);
+    else await renderHome();
+    window.scrollTo(0, 0);
+  } catch (err) {
+    if (err.message !== 'unauthorized') {
+      $app.innerHTML = `<p class="empty card">Something went wrong: ${esc(err.message)}</p>`;
+    }
+  }
+}
+
+window.addEventListener('hashchange', route);
+
+(async () => {
+  const me = await fetch('/api/me').then((r) => r.json()).catch(() => ({ authRequired: false, authed: true }));
+  if (me.authRequired && !me.authed) showLogin();
+  else route();
+})();

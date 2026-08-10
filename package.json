@@ -1,0 +1,20 @@
+{
+  "name": "petlife",
+  "version": "1.0.0",
+  "description": "A family timeline and medical record book for our pets",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.600.0",
+    "better-sqlite3": "^11.5.0",
+    "cookie-parser": "^1.4.6",
+    "express": "^4.19.2",
+    "multer": "^1.4.5-lts.1"
+  }
+}
