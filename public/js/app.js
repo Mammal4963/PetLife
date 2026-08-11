@@ -595,7 +595,7 @@ async function renderPetDetail(id) {
     weight: () => openForm(`Log weight for ${pet.name}`, [
       { name: 'weigh_date', label: 'Date', type: 'date', required: true, value: today() },
       { name: 'weight', label: 'Weight', type: 'number', required: true, placeholder: '8.2' },
-      { name: 'unit', label: 'Unit', type: 'select', options: [{ value: 'lb', label: 'lb' }, { value: 'kg', label: 'kg' }] },
+      { name: 'unit', label: 'Unit', type: 'select', options: [{ value: 'lb', label: 'lb' }, { value: 'oz', label: 'oz' }, { value: 'kg', label: 'kg' }] },
     ], async (d) => { await postJSON(`/api/pets/${id}/weights`, d); refresh(); }),
     document: () => {
       const modal = openModal(`Upload document for ${pet.name}`, `
