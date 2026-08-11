@@ -8,7 +8,9 @@
     "dev": "node --watch server.js",
     "dev:worker": "wrangler dev",
     "deploy": "wrangler deploy",
+    "deploy:hw": "wrangler deploy --env haley-will",
     "db:migrate": "wrangler d1 migrations apply petlife --remote",
+    "db:migrate:hw": "wrangler d1 migrations apply petlife-haley-will --env haley-will --remote",
     "db:migrate:local": "wrangler d1 migrations apply petlife --local"
   },
   "engines": {

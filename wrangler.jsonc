@@ -18,5 +18,28 @@
       "binding": "MEDIA",
       "bucket_name": "petlife-media"
     }
-  ]
+  ],
+  // Second deployment of the same code for Haley & Will — own Worker, own
+  // database, own bucket, own password. Deploy with: npm run deploy:hw
+  "env": {
+    "haley-will": {
+      "name": "petlife-haley-will",
+      "assets": {
+        "directory": "public"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "petlife-haley-will",
+          "database_id": "e574b33a-9a59-4a8d-88e2-32f19ade77af"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "MEDIA",
+          "bucket_name": "petlife-haley-will-media"
+        }
+      ]
+    }
+  }
 }

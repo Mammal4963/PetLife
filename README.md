@@ -52,6 +52,24 @@ site won't dent any of it. To develop locally against a simulated
 Cloudflare: copy `.dev.vars.example` to `.dev.vars`, run
 `npm run db:migrate:local`, then `npm run dev:worker`.
 
+### Second deployment (Haley & Will's site)
+
+The same code also deploys as a completely separate site — own Worker, own
+database, own media bucket, own password — via the `haley-will` environment
+in `wrangler.jsonc`:
+
+```bash
+npm run db:migrate:hw    # run new migrations on their database
+npm run deploy:hw        # → https://petlife-haley-will.<your-subdomain>.workers.dev
+```
+
+Shipping a feature to both sites is just both deploy commands from the same
+commit. To change their password: `npx wrangler secret put SITE_PASSWORD --env haley-will`.
+To move the site to their own Cloudflare account later: export/import the D1
+database, copy the R2 objects, deploy with their API token, and set fresh
+secrets — media URLs in the database are relative, so no data rewriting is
+needed.
+
 ### Running self-hosted instead (the Pi plan)
 
 ```bash
