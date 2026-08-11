@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Medical records — PetLife 🐾</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐾</text></svg>">
+  <script>
+    // Apply a saved theme choice before the first paint to avoid a flash.
+    (function () {
+      var t = localStorage.getItem('pl_theme');
+      if (t === 'dark' || t === 'light') document.documentElement.dataset.theme = t;
+    })();
+  </script>
+  <link rel="stylesheet" href="/css/styles.css">
+  <style>
+    .share-header { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+    .share-meta { color: var(--muted); font-size: 0.9rem; }
+    @media print {
+      .no-print { display: none !important; }
+      body { background: #fff; }
+      .card { box-shadow: none; border-color: #ccc; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar no-print">
+    <span class="brand">🐾 PetLife</span>
+    <button class="btn small" onclick="window.print()">🖨 Print</button>
+  </header>
+
+  <main id="app"><p class="empty card">Loading medical records…</p></main>
+
+  <script>
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[c]));
+    const fmtDate = (iso) => {
+      if (!iso) return '';
+      const [y, m, d] = iso.split('-').map(Number);
+      if (!y || !m || !d) return iso;
+      return new Date(y, m - 1, d).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+    };
+
+    function table(title, emoji, rows, cols) {
+      const header = cols.map((c) => `<th>${esc(c.label)}</th>`).join('');
+      const body = rows.map((r) => `<tr>${cols.map((c) =>
+        `<td>${esc(c.fmt ? c.fmt(r[c.key], r) : r[c.key] ?? '')}</td>`).join('')}</tr>`).join('');
+      return `<section class="card med-section">
+        <h3>${emoji} ${esc(title)}</h3>
+        ${rows.length ? `<div class="table-wrap"><table><thead><tr>${header}</tr></thead><tbody>${body}</tbody></table></div>`
+          : '<p class="empty">Nothing recorded.</p>'}
+      </section>`;
+    }
+
+    (async () => {
+      const token = new URLSearchParams(location.search).get('t') || '';
+      const app = document.getElementById('app');
+      let pet;
+      try {
+        const res = await fetch(`/api/share/${encodeURIComponent(token)}`);
+        pet = await res.json();
+        if (!res.ok) throw new Error(pet.error || 'Request failed');
+      } catch (err) {
+        app.innerHTML = `<p class="empty card">${esc(err.message)}. Please ask the pet's family for a new link.</p>`;
+        return;
+      }
+
+      const facts = [
+        pet.species && `Species: ${pet.species}`,
+        pet.breed && `Breed: ${pet.breed}`,
+        pet.sex && `Sex: ${pet.sex}`,
+        pet.birthdate && `Born: ${fmtDate(pet.birthdate)}`,
+        pet.passed_date && `Deceased: ${fmtDate(pet.passed_date)}`,
+      ].filter(Boolean).map((f) => `<span class="fact">${esc(f)}</span>`).join('');
+
+      const docs = pet.documents.length ? `<section class="card med-section">
+        <h3>📄 Documents</h3>
+        <ul class="doc-list">${pet.documents.map((d) => `
+          <li><a href="/api/share/${encodeURIComponent(token)}/documents/${d.id}" target="_blank" rel="noopener">📎 ${esc(d.title)}</a>
+            ${d.doc_date ? `<time>${fmtDate(d.doc_date)}</time>` : ''}</li>`).join('')}</ul>
+      </section>` : '';
+
+      document.title = `${pet.name} — medical records`;
+      app.innerHTML = `
+        <section class="card med-section share-header">
+          <div>
+            <h1>${esc(pet.name)}</h1>
+            <div class="facts">${facts}</div>
+          </div>
+          <p class="share-meta">Read-only medical summary shared by ${esc(pet.name)}'s family<br>
+            Generated ${new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}</p>
+        </section>
+        ${table('Vaccinations', '💉', pet.vaccinations, [
+          { key: 'name', label: 'Vaccine' },
+          { key: 'date_given', label: 'Given', fmt: fmtDate },
+          { key: 'due_date', label: 'Next due', fmt: (v) => v ? fmtDate(v) : '' },
+          { key: 'notes', label: 'Notes' },
+        ])}
+        ${table('Vet visits', '🩺', pet.visits, [
+          { key: 'visit_date', label: 'Date', fmt: fmtDate },
+          { key: 'reason', label: 'Reason' },
+          { key: 'vet_name', label: 'Vet' },
+          { key: 'notes', label: 'Notes' },
+        ])}
+        ${table('Medications', '💊', pet.medications, [
+          { key: 'name', label: 'Medication' },
+          { key: 'dose', label: 'Dose' },
+          { key: 'frequency', label: 'How often' },
+          { key: 'start_date', label: 'Started', fmt: fmtDate },
+          { key: 'end_date', label: 'Ends', fmt: (v) => v ? fmtDate(v) : 'ongoing' },
+        ])}
+        ${table('Weight log', '⚖️', pet.weights, [
+          { key: 'weigh_date', label: 'Date', fmt: fmtDate },
+          { key: 'weight', label: 'Weight', fmt: (v, r) => `${v} ${r.unit}` },
+        ])}
+        ${docs}`;
+    })();
+  </script>
+</body>
+</html>

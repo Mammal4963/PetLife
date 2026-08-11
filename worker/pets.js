@@ -93,6 +93,7 @@ app.delete('/api/pets/:id', async (c) => {
     c.env.DB.prepare('DELETE FROM documents WHERE pet_id = ?').bind(id),
     c.env.DB.prepare('DELETE FROM important_dates WHERE pet_id = ?').bind(id),
     c.env.DB.prepare('DELETE FROM post_pets WHERE pet_id = ?').bind(id),
+    c.env.DB.prepare('DELETE FROM share_links WHERE pet_id = ?').bind(id),
     c.env.DB.prepare('DELETE FROM pets WHERE id = ?').bind(id),
   ]);
   await deleteFiles(c.env, [existing.photo_key, ...docs.results.map((d) => d.storage_key)]);

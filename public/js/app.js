@@ -468,6 +468,61 @@ async function renderPets() {
   document.getElementById('add-pet').onclick = () => openPetForm();
 }
 
+// -------------------------------------------------------------- vet sharing
+
+async function openShareModal(pet) {
+  const links = await getJSON(`/api/pets/${pet.id}/shares`);
+  const linkRow = (l) => `
+    <li class="share-row">
+      <input type="text" readonly value="${location.origin}/share.html?t=${esc(l.token)}">
+      <button type="button" class="btn small" data-copy="${esc(l.token)}">Copy</button>
+      <button type="button" class="icon-btn subtle" data-revoke="${l.id}" title="Revoke this link">🗑</button>
+      <small>${l.expires_at ? `expires ${fmtDate(l.expires_at.slice(0, 10))}` : 'never expires'}</small>
+    </li>`;
+
+  const modal = openModal(`Share ${pet.name}'s medical records`, `
+    <p class="muted">Anyone with one of these links can see ${esc(pet.name)}'s medical records —
+      read-only, no password needed. Send one to your vet, and revoke it whenever you like.
+      The timeline and photos stay private.</p>
+    <ul class="share-list">${links.map(linkRow).join('') || '<li class="empty">No active links yet.</li>'}</ul>
+    <form class="share-new">
+      <select name="days">
+        <option value="30">Expires in 30 days</option>
+        <option value="7">Expires in 7 days</option>
+        <option value="90">Expires in 90 days</option>
+        <option value="">Never expires</option>
+      </select>
+      <button type="submit" class="btn primary small">+ New link</button>
+    </form>`);
+
+  modal.querySelector('.share-new').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    await postJSON(`/api/pets/${pet.id}/shares`, { days: e.target.elements.days.value });
+    openShareModal(pet);
+  });
+  modal.querySelectorAll('[data-copy]').forEach((btn) => {
+    btn.onclick = async () => {
+      const url = `${location.origin}/share.html?t=${btn.dataset.copy}`;
+      try {
+        await navigator.clipboard.writeText(url);
+      } catch {
+        const input = btn.previousElementSibling;
+        input.select();
+        document.execCommand('copy');
+      }
+      toast('Link copied — paste it in a text or email to your vet');
+    };
+  });
+  modal.querySelectorAll('[data-revoke]').forEach((btn) => {
+    btn.onclick = async () => {
+      if (!confirm('Revoke this link? Anyone using it will lose access.')) return;
+      await del(`/api/shares/${btn.dataset.revoke}`);
+      toast('Link revoked');
+      openShareModal(pet);
+    };
+  });
+}
+
 // --------------------------------------------------------------- pet detail
 
 function medTable(title, emoji, rows, cols, addLabel, onAdd, delType) {
@@ -510,6 +565,7 @@ async function renderPetDetail(id) {
         ${pet.notes ? `<p class="muted">${esc(pet.notes)}</p>` : ''}
         <div class="btn-row">
           <a class="btn small" href="#/timeline/${pet.id}">View timeline</a>
+          <button class="btn small" id="share-pet">Share with vet</button>
           <button class="btn small" id="edit-pet">Edit</button>
           <button class="btn small danger" id="delete-pet">Remove</button>
         </div>
@@ -553,6 +609,7 @@ async function renderPetDetail(id) {
         : '<p class="empty">No documents yet — vet records, adoption papers, anything.</p>'}
     </section>`;
 
+  document.getElementById('share-pet').onclick = () => openShareModal(pet);
   document.getElementById('edit-pet').onclick = () => openPetForm(pet);
   document.getElementById('delete-pet').onclick = async () => {
     if (!confirm(`Remove ${pet.name} and all their records? This can't be undone.`)) return;

@@ -11,6 +11,9 @@ app.disable('x-powered-by');
 app.use(cookieParser());
 
 app.use(authRouter);
+// Vet share links: the secret token in the URL is the credential, so this
+// router sits before the auth gate (its admin routes require auth themselves).
+app.use(require('./src/routes/share'));
 app.use('/api', requireAuth);
 app.use('/media', requireAuth, express.static(UPLOADS_DIR, { maxAge: '30d', immutable: true }));
 

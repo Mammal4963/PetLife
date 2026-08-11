@@ -103,6 +103,14 @@ CREATE TABLE IF NOT EXISTS important_dates (
   recurring INTEGER NOT NULL DEFAULT 0,
   notes TEXT
 );
+
+CREATE TABLE IF NOT EXISTS share_links (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  pet_id INTEGER NOT NULL REFERENCES pets(id) ON DELETE CASCADE,
+  token TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  expires_at TEXT
+);
 `);
 
 module.exports = { db, DATA_DIR };
