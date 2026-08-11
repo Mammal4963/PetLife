@@ -106,11 +106,32 @@ CREATE TABLE IF NOT EXISTS important_dates (
 
 CREATE TABLE IF NOT EXISTS share_links (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  pet_id INTEGER NOT NULL REFERENCES pets(id) ON DELETE CASCADE,
+  pet_id INTEGER REFERENCES pets(id) ON DELETE CASCADE,
+  scope TEXT NOT NULL DEFAULT 'medical',
   token TEXT NOT NULL UNIQUE,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   expires_at TEXT
 );
 `);
+
+// Upgrade share_links tables created before the scope column existed
+// (mirrors migrations/0003_share_scope.sql for the Workers backend).
+const shareCols = db.prepare('PRAGMA table_info(share_links)').all().map((c) => c.name);
+if (!shareCols.includes('scope')) {
+  db.exec(`
+    ALTER TABLE share_links RENAME TO share_links_old;
+    CREATE TABLE share_links (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      pet_id INTEGER REFERENCES pets(id) ON DELETE CASCADE,
+      scope TEXT NOT NULL DEFAULT 'medical',
+      token TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      expires_at TEXT
+    );
+    INSERT INTO share_links (id, pet_id, scope, token, created_at, expires_at)
+      SELECT id, pet_id, 'medical', token, created_at, expires_at FROM share_links_old;
+    DROP TABLE share_links_old;
+  `);
+}
 
 module.exports = { db, DATA_DIR };

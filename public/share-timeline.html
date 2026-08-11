@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PetLife 🐾 — shared timeline</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐾</text></svg>">
+  <script>
+    // Apply a saved theme choice before the first paint to avoid a flash.
+    (function () {
+      var t = localStorage.getItem('pl_theme');
+      if (t === 'dark' || t === 'light') document.documentElement.dataset.theme = t;
+    })();
+  </script>
+  <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <span class="brand">🐾 PetLife</span>
+    <span class="muted" style="font-size:0.85rem">shared with love</span>
+  </header>
+
+  <main id="app"><p class="empty card">Loading the timeline…</p></main>
+
+  <div id="lightbox" class="hidden"><img alt=""></div>
+
+  <script>
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[c]));
+    const fmtDate = (iso) => {
+      if (!iso) return '';
+      const [y, m, d] = iso.split('-').map(Number);
+      if (!y || !m || !d) return iso;
+      return new Date(y, m - 1, d).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+    };
+
+    const $lightbox = document.getElementById('lightbox');
+    $lightbox.addEventListener('click', () => $lightbox.classList.add('hidden'));
+    document.body.addEventListener('click', (e) => {
+      const img = e.target.closest('[data-lightbox]');
+      if (img) {
+        $lightbox.querySelector('img').src = img.dataset.lightbox;
+        $lightbox.classList.remove('hidden');
+      }
+    });
+
+    function petAvatar(pet) {
+      const memorial = pet.passed_date ? '<span class="memorial-badge" title="In loving memory">🌈</span>' : '';
+      if (pet.photo_url) {
+        return `<span class="avatar lg">${memorial}<img src="${esc(pet.photo_url)}" alt="${esc(pet.name)}"></span>`;
+      }
+      const emoji = pet.species === 'dog' ? '🐶' : pet.species === 'cat' ? '🐱' : '🐾';
+      return `<span class="avatar lg">${memorial}<span class="avatar-emoji">${emoji}</span></span>`;
+    }
+
+    function postCard(post) {
+      const petChips = post.pets.map((p) => `<span class="chip">${esc(p.name)}</span>`).join('');
+      const photos = post.media.length ? `
+        <div class="photo-grid n${Math.min(post.media.length, 4)}">
+          ${post.media.map((m) => `<img src="${esc(m.url)}" data-lightbox="${esc(m.url)}" loading="lazy" alt="">`).join('')}
+        </div>` : '';
+      const video = post.youtube_id ? `<div class="video-wrap"><iframe
+        src="https://www.youtube-nocookie.com/embed/${esc(post.youtube_id)}"
+        title="YouTube video" frameborder="0" loading="lazy"
+        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+        allowfullscreen></iframe></div>` : '';
+      return `
+        <article class="card post">
+          <div class="post-head"><div>
+            <time>${fmtDate(post.post_date)}</time>
+            ${post.title ? `<h3>${esc(post.title)}</h3>` : ''}
+          </div></div>
+          ${post.body ? `<p class="post-body">${esc(post.body).replace(/\n/g, '<br>')}</p>` : ''}
+          ${photos}
+          ${video}
+          ${petChips ? `<div class="chips">${petChips}</div>` : ''}
+        </article>`;
+    }
+
+    (async () => {
+      const token = new URLSearchParams(location.search).get('t') || '';
+      const app = document.getElementById('app');
+      let data;
+      try {
+        const res = await fetch(`/api/timeline-share/${encodeURIComponent(token)}`);
+        data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Request failed');
+      } catch (err) {
+        app.innerHTML = `<p class="empty card">${esc(err.message)}. Please ask the family for a new link.</p>`;
+        return;
+      }
+
+      const petTiles = data.pets.map((p) => `
+        <span class="pet-tile ${p.passed_date ? 'memorial' : ''}">
+          ${petAvatar(p)}
+          <strong>${esc(p.name)}</strong>
+          ${p.passed_date ? '<small>In loving memory</small>' : ''}
+        </span>`).join('');
+
+      app.innerHTML = `
+        <section class="hero">
+          <h1>The Family</h1>
+          <div class="pet-row">${petTiles}</div>
+        </section>
+        <section style="margin-top:1.3rem">
+          <div class="timeline">
+            ${data.posts.map(postCard).join('') || '<p class="empty card">No memories posted yet — check back soon! 🐾</p>'}
+          </div>
+        </section>`;
+    })();
+  </script>
+</body>
+</html>

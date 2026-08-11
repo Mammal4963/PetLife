@@ -434,7 +434,10 @@ async function renderTimeline(petId = null) {
   $app.innerHTML = `
     <section>
       <div class="section-head"><h1>Timeline</h1>
-        <button class="btn primary" id="new-post">+ New post</button></div>
+        <div class="btn-row">
+          <button class="btn" id="share-timeline">Share</button>
+          <button class="btn primary" id="new-post">+ New post</button>
+        </div></div>
       ${filters}
       <div class="timeline">
         ${posts.map((p) => postCard(p)).join('') ||
@@ -442,6 +445,7 @@ async function renderTimeline(petId = null) {
       </div>
     </section>`;
   document.getElementById('new-post').onclick = () => openPostForm(petId ? [Number(petId)] : []);
+  document.getElementById('share-timeline').onclick = openTimelineShareModal;
 }
 
 // -------------------------------------------------------------------- pets
@@ -470,20 +474,20 @@ async function renderPets() {
 
 // -------------------------------------------------------------- vet sharing
 
-async function openShareModal(pet) {
-  const links = await getJSON(`/api/pets/${pet.id}/shares`);
+// Shared modal for managing secret share links (medical or timeline scope).
+async function openShareLinksModal(cfg) {
+  const links = await getJSON(cfg.apiUrl);
+  const shareUrl = (token) => `${location.origin}${cfg.page}?t=${token}`;
   const linkRow = (l) => `
     <li class="share-row">
-      <input type="text" readonly value="${location.origin}/share.html?t=${esc(l.token)}">
+      <input type="text" readonly value="${esc(shareUrl(l.token))}">
       <button type="button" class="btn small" data-copy="${esc(l.token)}">Copy</button>
       <button type="button" class="icon-btn subtle" data-revoke="${l.id}" title="Revoke this link">🗑</button>
       <small>${l.expires_at ? `expires ${fmtDate(l.expires_at.slice(0, 10))}` : 'never expires'}</small>
     </li>`;
 
-  const modal = openModal(`Share ${pet.name}'s medical records`, `
-    <p class="muted">Anyone with one of these links can see ${esc(pet.name)}'s medical records —
-      read-only, no password needed. Send one to your vet, and revoke it whenever you like.
-      The timeline and photos stay private.</p>
+  const modal = openModal(cfg.title, `
+    <p class="muted">${cfg.blurb}</p>
     <ul class="share-list">${links.map(linkRow).join('') || '<li class="empty">No active links yet.</li>'}</ul>
     <form class="share-new">
       <select name="days">
@@ -497,20 +501,19 @@ async function openShareModal(pet) {
 
   modal.querySelector('.share-new').addEventListener('submit', async (e) => {
     e.preventDefault();
-    await postJSON(`/api/pets/${pet.id}/shares`, { days: e.target.elements.days.value });
-    openShareModal(pet);
+    await postJSON(cfg.apiUrl, { days: e.target.elements.days.value });
+    openShareLinksModal(cfg);
   });
   modal.querySelectorAll('[data-copy]').forEach((btn) => {
     btn.onclick = async () => {
-      const url = `${location.origin}/share.html?t=${btn.dataset.copy}`;
       try {
-        await navigator.clipboard.writeText(url);
+        await navigator.clipboard.writeText(shareUrl(btn.dataset.copy));
       } catch {
         const input = btn.previousElementSibling;
         input.select();
         document.execCommand('copy');
       }
-      toast('Link copied — paste it in a text or email to your vet');
+      toast(cfg.copiedToast);
     };
   });
   modal.querySelectorAll('[data-revoke]').forEach((btn) => {
@@ -518,8 +521,32 @@ async function openShareModal(pet) {
       if (!confirm('Revoke this link? Anyone using it will lose access.')) return;
       await del(`/api/shares/${btn.dataset.revoke}`);
       toast('Link revoked');
-      openShareModal(pet);
+      openShareLinksModal(cfg);
     };
+  });
+}
+
+function openShareModal(pet) {
+  return openShareLinksModal({
+    title: `Share ${pet.name}'s medical records`,
+    blurb: `Anyone with one of these links can see ${esc(pet.name)}'s medical records —
+      read-only, no password needed. Send one to your vet, and revoke it whenever you like.
+      The timeline and photos stay private.`,
+    apiUrl: `/api/pets/${pet.id}/shares`,
+    page: '/share.html',
+    copiedToast: 'Link copied — paste it in a text or email to your vet',
+  });
+}
+
+function openTimelineShareModal() {
+  return openShareLinksModal({
+    title: 'Share the timeline',
+    blurb: `Anyone with one of these links can see the whole timeline — photos, videos,
+      and posts — read-only, no password needed. Perfect for grandparents and friends.
+      Medical records stay private, and you can revoke a link whenever you like.`,
+    apiUrl: '/api/timeline-shares',
+    page: '/share-timeline.html',
+    copiedToast: 'Link copied — send it to family and friends',
   });
 }
 
