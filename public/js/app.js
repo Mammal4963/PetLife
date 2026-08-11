@@ -126,7 +126,8 @@ function openForm(title, fields, onSubmit, submitLabel = 'Save') {
       control = `<select name="${f.name}">${f.options.map((o) =>
         `<option value="${esc(o.value)}" ${String(o.value) === String(f.value) ? 'selected' : ''}>${esc(o.label)}</option>`).join('')}</select>`;
     } else {
-      control = `<input type="${f.type || 'text'}" name="${f.name}" value="${val}" ${req} placeholder="${esc(f.placeholder || '')}">`;
+      const step = f.type === 'number' ? 'step="any" inputmode="decimal"' : '';
+      control = `<input type="${f.type || 'text'}" name="${f.name}" value="${val}" ${req} ${step} placeholder="${esc(f.placeholder || '')}">`;
     }
     return `<label class="field"><span>${esc(f.label)}</span>${control}</label>`;
   }).join('');
