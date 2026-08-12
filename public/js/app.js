@@ -251,18 +251,32 @@ async function openPostForm(defaultPetIds = [], post = null) {
     <button type="button" class="chip tag-chip ${activeIds.includes(p.id) ? 'active' : ''}"
       data-pet="${p.id}">${esc(p.name)}</button>`).join('');
 
+  const carouselNav = (count) => count > 1 ? `
+    <div class="carousel-nav">
+      <button type="button" class="btn small" data-car-prev>‹ Prev</button>
+      <span class="carousel-counter">1 / ${count}</span>
+      <button type="button" class="btn small" data-car-next>Next ›</button>
+    </div>` : '';
+
   const existingPhotos = post?.media.length ? `
     <div class="field"><span>Current photos</span>
-      <div id="existing-photos" class="preview-row">
-        ${post.media.map((m) => `
-          <div class="preview-photo" data-media="${m.id}">
-            <img class="edit-thumb" src="${esc(m.url)}" alt="">
-            <input type="date" class="photo-date" data-media-date="${m.id}" value="${esc(m.media_date || post.post_date)}" title="When this photo was taken">
-            ${multiPet ? `<span class="photo-tag-chips" data-media-chips="${m.id}">
-              ${tagChips((m.pets || []).map((p) => p.id))}
-            </span>` : ''}
-            <button type="button" class="icon-btn subtle" data-remove-media title="Remove this photo">🗑</button>
-          </div>`).join('')}
+      <div id="existing-photos">
+        <div class="carousel-track">
+          ${post.media.map((m) => `
+            <figure class="carousel-slide preview-photo" data-media="${m.id}">
+              <img src="${esc(m.url)}" alt="">
+              <figcaption class="slide-controls">
+                ${multiPet ? `<span class="photo-tag-chips" data-media-chips="${m.id}">
+                  ${tagChips((m.pets || []).map((p) => p.id))}
+                </span>` : ''}
+                <span class="slide-meta">
+                  <input type="date" class="photo-date" data-media-date="${m.id}" value="${esc(m.media_date || post.post_date)}" title="When this photo was taken">
+                  <button type="button" class="btn small danger" data-remove-media>🗑 Remove</button>
+                </span>
+              </figcaption>
+            </figure>`).join('')}
+        </div>
+        ${carouselNav(post.media.length)}
       </div>
     </div>` : '';
 
@@ -308,10 +322,28 @@ async function openPostForm(defaultPetIds = [], post = null) {
     if (chip) chip.classList.toggle('active');
     const remove = e.target.closest('[data-remove-media]');
     if (remove) {
-      remove.closest('.preview-photo').classList.toggle('removed');
+      const slide = remove.closest('.preview-photo');
+      slide.classList.toggle('removed');
+      remove.textContent = slide.classList.contains('removed') ? '↩ Keep it' : '🗑 Remove';
       updateDateVisibility();
     }
   });
+
+  // Prev/Next arrows and position counter for a carousel container.
+  const wireCarousel = (root, count) => {
+    const track = root?.querySelector('.carousel-track');
+    const counter = root?.querySelector('.carousel-counter');
+    if (!track || !counter) return;
+    track.addEventListener('scroll', () => {
+      const idx = Math.min(Math.round(track.scrollLeft / track.clientWidth) + 1, count);
+      counter.textContent = `${idx} / ${count}`;
+    }, { passive: true });
+    root.querySelector('[data-car-prev]').onclick = () =>
+      track.scrollBy({ left: -track.clientWidth, behavior: 'smooth' });
+    root.querySelector('[data-car-next]').onclick = () =>
+      track.scrollBy({ left: track.clientWidth, behavior: 'smooth' });
+  };
+  wireCarousel(modal.querySelector('#existing-photos'), post?.media.length || 0);
 
   let previewUrls = [];
   fileInput.addEventListener('change', async () => {
@@ -349,25 +381,8 @@ async function openPostForm(defaultPetIds = [], post = null) {
             </figcaption>
           </figure>`).join('')}
       </div>
-      ${compressed.length > 1 ? `
-        <div class="carousel-nav">
-          <button type="button" class="btn small" data-car-prev>‹ Prev</button>
-          <span class="carousel-counter">1 / ${compressed.length}</span>
-          <button type="button" class="btn small" data-car-next>Next ›</button>
-        </div>` : ''}`;
-
-    const track = preview.querySelector('.carousel-track');
-    const counter = preview.querySelector('.carousel-counter');
-    if (counter) {
-      track.addEventListener('scroll', () => {
-        const idx = Math.min(Math.round(track.scrollLeft / track.clientWidth) + 1, compressed.length);
-        counter.textContent = `${idx} / ${compressed.length}`;
-      }, { passive: true });
-      preview.querySelector('[data-car-prev]').onclick = () =>
-        track.scrollBy({ left: -track.clientWidth, behavior: 'smooth' });
-      preview.querySelector('[data-car-next]').onclick = () =>
-        track.scrollBy({ left: track.clientWidth, behavior: 'smooth' });
-    }
+      ${carouselNav(compressed.length)}`;
+    wireCarousel(preview, compressed.length);
     updateDateVisibility();
   });
 
