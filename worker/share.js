@@ -121,7 +121,7 @@ sharePublic.get('/api/timeline-share/:token', async (c) => {
 
   const [pets, posts, media, links, mediaTags] = await c.env.DB.batch([
     c.env.DB.prepare('SELECT id, name, species, breed, birthdate, adopted_date, passed_date, photo_key FROM pets ORDER BY passed_date IS NOT NULL, name'),
-    c.env.DB.prepare('SELECT id, title, body, post_date, youtube_url FROM posts ORDER BY post_date DESC, id DESC'),
+    c.env.DB.prepare('SELECT id, title, body, post_date, post_date_end, youtube_url FROM posts ORDER BY post_date DESC, id DESC'),
     c.env.DB.prepare('SELECT id, post_id, storage_key, url FROM post_media ORDER BY id'),
     c.env.DB.prepare('SELECT pp.post_id AS post_id, p.id AS id, p.name AS name FROM post_pets pp JOIN pets p ON p.id = pp.pet_id ORDER BY p.name'),
     c.env.DB.prepare('SELECT mp.media_id AS media_id, p.id AS id, p.name AS name FROM media_pets mp JOIN pets p ON p.id = mp.pet_id ORDER BY p.name'),
@@ -145,6 +145,7 @@ sharePublic.get('/api/timeline-share/:token', async (c) => {
       title: p.title,
       body: p.body,
       post_date: p.post_date,
+      post_date_end: p.post_date_end,
       youtube_id: youtubeId(p.youtube_url),
       media: [],
       pets: [],

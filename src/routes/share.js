@@ -117,12 +117,13 @@ router.get('/api/timeline-share/:token', (req, res) => {
       photo_url: p.photo_key ? mediaUrl(p.photo_key, p.photo_url) : null,
     }));
 
-  const posts = db.prepare('SELECT id, title, body, post_date, youtube_url FROM posts ORDER BY post_date DESC, id DESC')
+  const posts = db.prepare('SELECT id, title, body, post_date, post_date_end, youtube_url FROM posts ORDER BY post_date DESC, id DESC')
     .all().map((p) => ({
       id: p.id,
       title: p.title,
       body: p.body,
       post_date: p.post_date,
+      post_date_end: p.post_date_end,
       youtube_id: youtubeId(p.youtube_url),
       media: db.prepare('SELECT id, storage_key, url FROM post_media WHERE post_id = ? ORDER BY id').all(p.id)
         .map((m) => ({

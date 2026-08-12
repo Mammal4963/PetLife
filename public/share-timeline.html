@@ -34,6 +34,8 @@
       if (!y || !m || !d) return iso;
       return new Date(y, m - 1, d).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
     };
+    const fmtDateRange = (start, end) =>
+      end && end !== start ? `${fmtDate(start)} – ${fmtDate(end)}` : fmtDate(start);
 
     const $lightbox = document.getElementById('lightbox');
     $lightbox.addEventListener('click', () => $lightbox.classList.add('hidden'));
@@ -72,7 +74,7 @@
       return `
         <article class="card post">
           <div class="post-head"><div>
-            <time>${fmtDate(post.post_date)}</time>
+            <time>${fmtDateRange(post.post_date, post.post_date_end)}</time>
             ${post.title ? `<h3>${esc(post.title)}</h3>` : ''}
           </div></div>
           ${post.body ? `<p class="post-body">${esc(post.body).replace(/\n/g, '<br>')}</p>` : ''}

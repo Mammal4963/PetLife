@@ -120,6 +120,13 @@ CREATE TABLE IF NOT EXISTS media_pets (
 );
 `);
 
+// Upgrade posts tables created before date ranges existed
+// (mirrors migrations/0005_post_date_end.sql for the Workers backend).
+const postCols = db.prepare('PRAGMA table_info(posts)').all().map((c) => c.name);
+if (!postCols.includes('post_date_end')) {
+  db.exec('ALTER TABLE posts ADD COLUMN post_date_end TEXT');
+}
+
 // Upgrade share_links tables created before the scope column existed
 // (mirrors migrations/0003_share_scope.sql for the Workers backend).
 const shareCols = db.prepare('PRAGMA table_info(share_links)').all().map((c) => c.name);

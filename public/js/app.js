@@ -18,6 +18,10 @@ function fmtDate(iso) {
   return new Date(y, m - 1, d).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
+function fmtDateRange(start, end) {
+  return end && end !== start ? `${fmtDate(start)} – ${fmtDate(end)}` : fmtDate(start);
+}
+
 function today() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -206,10 +210,13 @@ function postCard(post, { showDelete = true } = {}) {
     <article class="card post" data-post-id="${post.id}">
       <div class="post-head">
         <div>
-          <time>${fmtDate(post.post_date)}</time>
+          <time>${fmtDateRange(post.post_date, post.post_date_end)}</time>
           ${post.title ? `<h3>${esc(post.title)}</h3>` : ''}
         </div>
-        ${showDelete ? `<button class="icon-btn subtle" data-del-post="${post.id}" title="Delete post">🗑</button>` : ''}
+        ${showDelete ? `<span>
+          <button class="icon-btn subtle" data-edit-post="${post.id}" title="Edit post">✎</button>
+          <button class="icon-btn subtle" data-del-post="${post.id}" title="Delete post">🗑</button>
+        </span>` : ''}
       </div>
       ${post.body ? `<p class="post-body">${esc(post.body).replace(/\n/g, '<br>')}</p>` : ''}
       ${photos}
@@ -229,27 +236,54 @@ document.body.addEventListener('click', async (e) => {
 
 // ----------------------------------------------------------------- new post
 
-async function openPostForm(defaultPetIds = []) {
+// Create a new post, or edit an existing one when `post` is given.
+async function openPostForm(defaultPetIds = [], post = null) {
   const pets = await loadPets();
-  const petChecks = pets.filter((p) => !p.passed_date || defaultPetIds.includes(p.id)).map((p) => `
+  const checkedIds = post ? post.pets.map((p) => p.id) : defaultPetIds;
+  const petChecks = pets.filter((p) => !p.passed_date || checkedIds.includes(p.id)).map((p) => `
     <label class="check"><input type="checkbox" name="pet_ids" value="${p.id}"
-      ${defaultPetIds.includes(p.id) || (defaultPetIds.length === 0 && !p.passed_date) ? 'checked' : ''}> ${esc(p.name)}</label>`).join('');
+      ${checkedIds.includes(p.id) || (!post && defaultPetIds.length === 0 && !p.passed_date) ? 'checked' : ''}> ${esc(p.name)}</label>`).join('');
 
-  const modal = openModal('New timeline post', `
+  // Pets that can be tagged in individual photos (same set as "Who's in it?").
+  const tagPets = pets.filter((p) => !p.passed_date || checkedIds.includes(p.id));
+  const multiPet = tagPets.length > 1;
+  const tagChips = (activeIds) => tagPets.map((p) => `
+    <button type="button" class="chip tag-chip ${activeIds.includes(p.id) ? 'active' : ''}"
+      data-pet="${p.id}">${esc(p.name)}</button>`).join('');
+
+  const existingPhotos = post?.media.length ? `
+    <div class="field"><span>Current photos</span>
+      <div id="existing-photos" class="preview-row">
+        ${post.media.map((m) => `
+          <div class="preview-photo" data-media="${m.id}">
+            <img class="edit-thumb" src="${esc(m.url)}" alt="">
+            ${multiPet ? `<span class="photo-tag-chips" data-media-chips="${m.id}">
+              ${tagChips((m.pets || []).map((p) => p.id))}
+            </span>` : ''}
+            <button type="button" class="icon-btn subtle" data-remove-media title="Remove this photo">🗑</button>
+          </div>`).join('')}
+      </div>
+    </div>` : '';
+
+  const modal = openModal(post ? 'Edit post' : 'New timeline post', `
     <form class="stack" id="post-form">
-      <label class="field"><span>Date</span><input type="date" name="post_date" value="${today()}" required>
-        <small id="date-hint"></small></label>
-      <label class="field"><span>Title (optional)</span><input type="text" name="title" placeholder="First day home!"></label>
-      <label class="field"><span>What happened?</span><textarea name="body" rows="3" placeholder="Tell the story…"></textarea></label>
+      <div class="two-col">
+        <label class="field"><span>Date</span><input type="date" name="post_date" value="${esc(post?.post_date || today())}" required></label>
+        <label class="field"><span>to (optional)</span><input type="date" name="post_date_end" value="${esc(post?.post_date_end || '')}"></label>
+      </div>
+      <small id="date-hint"></small>
+      <label class="field"><span>Title (optional)</span><input type="text" name="title" value="${esc(post?.title || '')}" placeholder="First day home!"></label>
+      <label class="field"><span>What happened?</span><textarea name="body" rows="3" placeholder="Tell the story…">${esc(post?.body || '')}</textarea></label>
       <div class="field"><span>Who's in it?</span><div class="checks">${petChecks || '<em>Add a pet first to tag them</em>'}</div></div>
-      <label class="field"><span>Photos</span><input type="file" name="photos" accept="image/*" multiple></label>
+      ${existingPhotos}
+      <label class="field"><span>${post ? 'Add photos' : 'Photos'}</span><input type="file" name="photos" accept="image/*" multiple></label>
       <div id="photo-preview" class="preview-row"></div>
       <label class="field"><span>YouTube link (optional)</span>
-        <input type="url" name="youtube_url" placeholder="https://youtu.be/…">
+        <input type="url" name="youtube_url" value="${esc(post?.youtube_url || '')}" placeholder="https://youtu.be/…">
         <small>Upload videos to your unlisted YouTube channel from your phone, then paste the link here — free hosting forever.</small>
       </label>
       <p class="error form-error"></p>
-      <button type="submit" class="btn primary">Post it 🐾</button>
+      <button type="submit" class="btn primary">${post ? 'Save changes' : 'Post it 🐾'}</button>
     </form>`);
 
   const form = modal.querySelector('#post-form');
@@ -258,31 +292,39 @@ async function openPostForm(defaultPetIds = []) {
   let compressed = [];
 
   const dateInput = form.elements.post_date;
+  const dateEndInput = form.elements.post_date_end;
   const dateHint = modal.querySelector('#date-hint');
-  let dateTouched = false;
-  dateInput.addEventListener('input', () => { dateTouched = true; dateHint.textContent = ''; });
+  // When editing, the dates are already deliberate — never overwrite them.
+  let dateTouched = Boolean(post);
+  const markTouched = () => { dateTouched = true; dateHint.textContent = ''; };
+  dateInput.addEventListener('input', markTouched);
+  dateEndInput.addEventListener('input', markTouched);
 
-  // Pets that can be tagged in individual photos (same set as "Who's in it?").
-  const tagPets = pets.filter((p) => !p.passed_date || defaultPetIds.includes(p.id));
   const checkedPetIds = () =>
     [...form.querySelectorAll('input[name=pet_ids]:checked')].map((c) => Number(c.value));
 
-  preview.addEventListener('click', (e) => {
+  modal.addEventListener('click', (e) => {
     const chip = e.target.closest('.tag-chip');
     if (chip) chip.classList.toggle('active');
+    const remove = e.target.closest('[data-remove-media]');
+    if (remove) remove.closest('.preview-photo').classList.toggle('removed');
   });
 
   fileInput.addEventListener('change', async () => {
     preview.innerHTML = '<em>Compressing photos…</em>';
     compressed = [];
     const files = [...fileInput.files];
-    // Date the post to when the photos were taken, unless the user already picked a date.
+    // Date the post to when the photos were taken — a single day, or the
+    // span of days if the photos range — unless the user already picked dates.
     const dates = (await Promise.all(files.map(readPhotoDate))).filter(Boolean).sort();
     if (dates.length && !dateTouched) {
-      dateInput.value = dates[0];
-      dateHint.textContent = dates[0] === dates[dates.length - 1]
-        ? "📷 Date set from the photos' date taken"
-        : `📷 Photos span ${fmtDate(dates[0])} – ${fmtDate(dates[dates.length - 1])}; using the earliest`;
+      const first = dates[0];
+      const last = dates[dates.length - 1];
+      dateInput.value = first;
+      dateEndInput.value = last !== first ? last : '';
+      dateHint.textContent = last !== first
+        ? "📷 Date range set from the photos' dates taken"
+        : "📷 Date set from the photos' date taken";
     }
     for (const file of files) {
       compressed.push(await compressImage(file));
@@ -293,10 +335,7 @@ async function openPostForm(defaultPetIds = []) {
     preview.innerHTML = compressed.map((f, i) => `
       <div class="preview-photo">
         <span class="preview-chip">📷 ${esc(f.name)} <small>${(f.size / 1024).toFixed(0)} KB</small></span>
-        ${tagPets.length > 1 ? `<span class="photo-tag-chips" data-photo="${i}">
-          ${tagPets.map((p) => `<button type="button" class="chip tag-chip ${defaults.includes(p.id) ? 'active' : ''}"
-            data-pet="${p.id}">${esc(p.name)}</button>`).join('')}
-        </span>` : ''}
+        ${multiPet ? `<span class="photo-tag-chips" data-photo="${i}">${tagChips(defaults)}</span>` : ''}
       </div>`).join('');
   });
 
@@ -304,11 +343,13 @@ async function openPostForm(defaultPetIds = []) {
     e.preventDefault();
     const btn = form.querySelector('button[type=submit]');
     btn.disabled = true;
-    btn.textContent = 'Posting…';
+    btn.textContent = post ? 'Saving…' : 'Posting…';
     try {
       const fd = new FormData();
-      for (const name of ['post_date', 'title', 'body', 'youtube_url']) fd.append(name, form.elements[name].value);
-      // Per-photo tags from the toggles; without toggles (single pet), every
+      for (const name of ['post_date', 'post_date_end', 'title', 'body', 'youtube_url']) {
+        fd.append(name, form.elements[name].value);
+      }
+      // Per-photo tags for new photos; without toggles (single pet), every
       // photo inherits the post's checked pets.
       const tagRows = [...preview.querySelectorAll('.photo-tag-chips')];
       const photoTags = compressed.map((_, i) => {
@@ -317,21 +358,41 @@ async function openPostForm(defaultPetIds = []) {
           ? [...row.querySelectorAll('.tag-chip.active')].map((c) => Number(c.dataset.pet))
           : checkedPetIds();
       });
+      fd.append('photo_pets', JSON.stringify(photoTags));
+
+      // Existing photos (edit only): removals and updated tags.
+      const mediaTags = {};
+      const removeMedia = [];
+      modal.querySelectorAll('#existing-photos .preview-photo').forEach((row) => {
+        const mid = Number(row.dataset.media);
+        if (row.classList.contains('removed')) {
+          removeMedia.push(mid);
+          return;
+        }
+        const chips = row.querySelector('[data-media-chips]');
+        if (chips) mediaTags[mid] = [...chips.querySelectorAll('.tag-chip.active')].map((c) => Number(c.dataset.pet));
+      });
+      if (post) {
+        fd.append('remove_media', JSON.stringify(removeMedia));
+        fd.append('media_pets', JSON.stringify(mediaTags));
+      }
+
       // The post is tagged with everyone who appears in it — checked boxes
       // plus anyone tagged in a photo — so pet timelines stay complete.
       const postPets = new Set(checkedPetIds());
       photoTags.flat().forEach((id) => postPets.add(id));
+      Object.values(mediaTags).flat().forEach((id) => postPets.add(id));
       postPets.forEach((id) => fd.append('pet_ids', id));
-      fd.append('photo_pets', JSON.stringify(photoTags));
+
       for (const f of compressed) fd.append('photos', f, f.name);
-      await api('/api/posts', { method: 'POST', body: fd });
+      await api(post ? `/api/posts/${post.id}` : '/api/posts', { method: post ? 'PUT' : 'POST', body: fd });
       closeModal();
-      toast('Posted! 🎉');
+      toast(post ? 'Saved' : 'Posted! 🎉');
       route();
     } catch (err) {
       form.querySelector('.form-error').textContent = err.message;
       btn.disabled = false;
-      btn.textContent = 'Post it 🐾';
+      btn.textContent = post ? 'Save changes' : 'Post it 🐾';
     }
   });
 }
@@ -485,6 +546,9 @@ async function renderTimeline(petId = null) {
     </section>`;
   document.getElementById('new-post').onclick = () => openPostForm(petId ? [Number(petId)] : []);
   document.getElementById('share-timeline').onclick = openTimelineShareModal;
+  $app.querySelectorAll('[data-edit-post]').forEach((btn) => {
+    btn.onclick = () => openPostForm([], posts.find((p) => p.id === Number(btn.dataset.editPost)));
+  });
 }
 
 // -------------------------------------------------------------------- pets
