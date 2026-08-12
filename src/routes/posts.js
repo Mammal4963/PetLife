@@ -18,7 +18,13 @@ function youtubeId(url) {
 function loadPost(id) {
   const post = db.prepare('SELECT * FROM posts WHERE id = ?').get(id);
   if (!post) return null;
-  post.media = db.prepare('SELECT id, url FROM post_media WHERE post_id = ? ORDER BY id').all(id);
+  post.media = db.prepare('SELECT id, url FROM post_media WHERE post_id = ? ORDER BY id').all(id)
+    .map((m) => ({
+      ...m,
+      pets: db.prepare(
+        'SELECT p.id, p.name FROM media_pets mp JOIN pets p ON p.id = mp.pet_id WHERE mp.media_id = ? ORDER BY p.name'
+      ).all(m.id),
+    }));
   post.pets = db.prepare(
     'SELECT p.id, p.name FROM pets p JOIN post_pets pp ON pp.pet_id = p.id WHERE pp.post_id = ? ORDER BY p.name'
   ).all(id);
@@ -59,11 +65,26 @@ router.post('/api/posts', upload.array('photos'), async (req, res) => {
     if (db.prepare('SELECT id FROM pets WHERE id = ?').get(pid)) linkPet.run(postId, pid);
   }
 
+  // Optional per-photo pet tags: a JSON array of pet-id arrays, aligned with
+  // the photos in upload order, e.g. [[1,2],[1]] for two photos.
+  let photoTags = [];
+  try {
+    const parsed = JSON.parse(req.body.photo_pets || '[]');
+    if (Array.isArray(parsed)) photoTags = parsed;
+  } catch { /* ignore malformed tags — photos still save untagged */ }
+
   const insertMedia = db.prepare('INSERT INTO post_media (post_id, url, storage_key) VALUES (?, ?, ?)');
+  const tagMedia = db.prepare('INSERT OR IGNORE INTO media_pets (media_id, pet_id) VALUES (?, ?)');
+  let photoIndex = 0;
   for (const file of req.files || []) {
     if (!file.mimetype.startsWith('image/')) continue;
     const saved = await saveFile(file.buffer, file.originalname, file.mimetype);
-    insertMedia.run(postId, saved.url, saved.key);
+    const mediaId = insertMedia.run(postId, saved.url, saved.key).lastInsertRowid;
+    const tags = Array.isArray(photoTags[photoIndex]) ? photoTags[photoIndex] : [];
+    for (const pid of tags) {
+      if (db.prepare('SELECT id FROM pets WHERE id = ?').get(pid)) tagMedia.run(mediaId, pid);
+    }
+    photoIndex++;
   }
 
   res.json(loadPost(postId));

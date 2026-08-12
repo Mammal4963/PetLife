@@ -124,8 +124,13 @@ router.get('/api/timeline-share/:token', (req, res) => {
       body: p.body,
       post_date: p.post_date,
       youtube_id: youtubeId(p.youtube_url),
-      media: db.prepare('SELECT storage_key, url FROM post_media WHERE post_id = ? ORDER BY id').all(p.id)
-        .map((m) => ({ url: mediaUrl(m.storage_key, m.url) })),
+      media: db.prepare('SELECT id, storage_key, url FROM post_media WHERE post_id = ? ORDER BY id').all(p.id)
+        .map((m) => ({
+          url: mediaUrl(m.storage_key, m.url),
+          pets: db.prepare(
+            'SELECT p.id, p.name FROM media_pets mp JOIN pets p ON p.id = mp.pet_id WHERE mp.media_id = ? ORDER BY p.name'
+          ).all(m.id),
+        })),
       pets: db.prepare(
         'SELECT p.id, p.name FROM pets p JOIN post_pets pp ON pp.pet_id = p.id WHERE pp.post_id = ? ORDER BY p.name').all(p.id),
     }));

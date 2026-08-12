@@ -192,9 +192,15 @@ function youtubeEmbed(id) {
 
 function postCard(post, { showDelete = true } = {}) {
   const petChips = post.pets.map((p) => `<a class="chip" href="#/pet/${p.id}">${esc(p.name)}</a>`).join('');
+  // Per-photo name badges are only informative when the family has
+  // more than one pet in the post.
+  const showTags = post.pets.length > 1;
   const photos = post.media.length ? `
     <div class="photo-grid n${Math.min(post.media.length, 4)}">
-      ${post.media.map((m) => `<img src="${esc(m.url)}" data-lightbox="${esc(m.url)}" loading="lazy" alt="">`).join('')}
+      ${post.media.map((m) => `<figure class="photo-cell">
+        <img src="${esc(m.url)}" data-lightbox="${esc(m.url)}" loading="lazy" alt="">
+        ${showTags && m.pets?.length ? `<figcaption class="photo-tags">${esc(m.pets.map((p) => p.name).join(', '))}</figcaption>` : ''}
+      </figure>`).join('')}
     </div>` : '';
   return `
     <article class="card post" data-post-id="${post.id}">
@@ -256,6 +262,16 @@ async function openPostForm(defaultPetIds = []) {
   let dateTouched = false;
   dateInput.addEventListener('input', () => { dateTouched = true; dateHint.textContent = ''; });
 
+  // Pets that can be tagged in individual photos (same set as "Who's in it?").
+  const tagPets = pets.filter((p) => !p.passed_date || defaultPetIds.includes(p.id));
+  const checkedPetIds = () =>
+    [...form.querySelectorAll('input[name=pet_ids]:checked')].map((c) => Number(c.value));
+
+  preview.addEventListener('click', (e) => {
+    const chip = e.target.closest('.tag-chip');
+    if (chip) chip.classList.toggle('active');
+  });
+
   fileInput.addEventListener('change', async () => {
     preview.innerHTML = '<em>Compressing photos…</em>';
     compressed = [];
@@ -271,8 +287,17 @@ async function openPostForm(defaultPetIds = []) {
     for (const file of files) {
       compressed.push(await compressImage(file));
     }
-    preview.innerHTML = compressed.map((f) =>
-      `<span class="preview-chip">📷 ${esc(f.name)} <small>${(f.size / 1024).toFixed(0)} KB</small></span>`).join('');
+    // With more than one taggable pet, each photo gets its own who's-in-this-one
+    // toggles, pre-set to the pets checked for the post.
+    const defaults = checkedPetIds();
+    preview.innerHTML = compressed.map((f, i) => `
+      <div class="preview-photo">
+        <span class="preview-chip">📷 ${esc(f.name)} <small>${(f.size / 1024).toFixed(0)} KB</small></span>
+        ${tagPets.length > 1 ? `<span class="photo-tag-chips" data-photo="${i}">
+          ${tagPets.map((p) => `<button type="button" class="chip tag-chip ${defaults.includes(p.id) ? 'active' : ''}"
+            data-pet="${p.id}">${esc(p.name)}</button>`).join('')}
+        </span>` : ''}
+      </div>`).join('');
   });
 
   form.addEventListener('submit', async (e) => {
@@ -283,7 +308,21 @@ async function openPostForm(defaultPetIds = []) {
     try {
       const fd = new FormData();
       for (const name of ['post_date', 'title', 'body', 'youtube_url']) fd.append(name, form.elements[name].value);
-      form.querySelectorAll('input[name=pet_ids]:checked').forEach((c) => fd.append('pet_ids', c.value));
+      // Per-photo tags from the toggles; without toggles (single pet), every
+      // photo inherits the post's checked pets.
+      const tagRows = [...preview.querySelectorAll('.photo-tag-chips')];
+      const photoTags = compressed.map((_, i) => {
+        const row = tagRows.find((r) => Number(r.dataset.photo) === i);
+        return row
+          ? [...row.querySelectorAll('.tag-chip.active')].map((c) => Number(c.dataset.pet))
+          : checkedPetIds();
+      });
+      // The post is tagged with everyone who appears in it — checked boxes
+      // plus anyone tagged in a photo — so pet timelines stay complete.
+      const postPets = new Set(checkedPetIds());
+      photoTags.flat().forEach((id) => postPets.add(id));
+      postPets.forEach((id) => fd.append('pet_ids', id));
+      fd.append('photo_pets', JSON.stringify(photoTags));
       for (const f of compressed) fd.append('photos', f, f.name);
       await api('/api/posts', { method: 'POST', body: fd });
       closeModal();

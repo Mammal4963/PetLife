@@ -56,9 +56,13 @@
 
     function postCard(post) {
       const petChips = post.pets.map((p) => `<span class="chip">${esc(p.name)}</span>`).join('');
+      const showTags = post.pets.length > 1;
       const photos = post.media.length ? `
         <div class="photo-grid n${Math.min(post.media.length, 4)}">
-          ${post.media.map((m) => `<img src="${esc(m.url)}" data-lightbox="${esc(m.url)}" loading="lazy" alt="">`).join('')}
+          ${post.media.map((m) => `<figure class="photo-cell">
+            <img src="${esc(m.url)}" data-lightbox="${esc(m.url)}" loading="lazy" alt="">
+            ${showTags && m.pets?.length ? `<figcaption class="photo-tags">${esc(m.pets.map((p) => p.name).join(', '))}</figcaption>` : ''}
+          </figure>`).join('')}
         </div>` : '';
       const video = post.youtube_id ? `<div class="video-wrap"><iframe
         src="https://www.youtube-nocookie.com/embed/${esc(post.youtube_id)}"

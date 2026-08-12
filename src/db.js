@@ -112,6 +112,12 @@ CREATE TABLE IF NOT EXISTS share_links (
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   expires_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS media_pets (
+  media_id INTEGER NOT NULL REFERENCES post_media(id) ON DELETE CASCADE,
+  pet_id INTEGER NOT NULL REFERENCES pets(id) ON DELETE CASCADE,
+  PRIMARY KEY (media_id, pet_id)
+);
 `);
 
 // Upgrade share_links tables created before the scope column existed

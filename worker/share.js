@@ -119,11 +119,12 @@ sharePublic.get('/api/timeline-share/:token', async (c) => {
   if (!share) return c.json({ error: 'This link is invalid or has expired' }, 404);
   const mediaUrl = (key) => `/api/timeline-share/${share.token}/media/${key}`;
 
-  const [pets, posts, media, links] = await c.env.DB.batch([
+  const [pets, posts, media, links, mediaTags] = await c.env.DB.batch([
     c.env.DB.prepare('SELECT id, name, species, breed, birthdate, adopted_date, passed_date, photo_key FROM pets ORDER BY passed_date IS NOT NULL, name'),
     c.env.DB.prepare('SELECT id, title, body, post_date, youtube_url FROM posts ORDER BY post_date DESC, id DESC'),
     c.env.DB.prepare('SELECT id, post_id, storage_key, url FROM post_media ORDER BY id'),
     c.env.DB.prepare('SELECT pp.post_id AS post_id, p.id AS id, p.name AS name FROM post_pets pp JOIN pets p ON p.id = pp.pet_id ORDER BY p.name'),
+    c.env.DB.prepare('SELECT mp.media_id AS media_id, p.id AS id, p.name AS name FROM media_pets mp JOIN pets p ON p.id = mp.pet_id ORDER BY p.name'),
   ]);
 
   const petsOut = pets.results.map((p) => ({
@@ -151,9 +152,13 @@ sharePublic.get('/api/timeline-share/:token', async (c) => {
     byId.set(p.id, out);
     return out;
   });
+  const mediaById = new Map();
   for (const m of media.results) {
-    byId.get(m.post_id)?.media.push({ url: m.storage_key ? mediaUrl(m.storage_key) : m.url });
+    const entry = { url: m.storage_key ? mediaUrl(m.storage_key) : m.url, pets: [] };
+    mediaById.set(m.id, entry);
+    byId.get(m.post_id)?.media.push(entry);
   }
+  for (const t of mediaTags.results) mediaById.get(t.media_id)?.pets.push({ id: t.id, name: t.name });
   for (const l of links.results) byId.get(l.post_id)?.pets.push({ id: l.id, name: l.name });
 
   return c.json({ pets: petsOut, posts: postsOut });

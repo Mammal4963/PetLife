@@ -19,10 +19,11 @@ async function listPosts(env, petId, onlyPostId) {
       .prepare('SELECT DISTINCT post_id FROM post_pets WHERE pet_id = ?').bind(petId).all();
     idFilter = new Set(results.map((r) => r.post_id));
   }
-  const [posts, media, links] = await env.DB.batch([
+  const [posts, media, links, mediaTags] = await env.DB.batch([
     env.DB.prepare('SELECT * FROM posts ORDER BY post_date DESC, id DESC'),
     env.DB.prepare('SELECT id, post_id, url FROM post_media ORDER BY id'),
     env.DB.prepare('SELECT pp.post_id AS post_id, p.id AS id, p.name AS name FROM post_pets pp JOIN pets p ON p.id = pp.pet_id ORDER BY p.name'),
+    env.DB.prepare('SELECT mp.media_id AS media_id, p.id AS id, p.name AS name FROM media_pets mp JOIN pets p ON p.id = mp.pet_id ORDER BY p.name'),
   ]);
   const byId = new Map();
   for (const p of posts.results) {
@@ -31,7 +32,13 @@ async function listPosts(env, petId, onlyPostId) {
     p.youtube_id = youtubeId(p.youtube_url);
     byId.set(p.id, p);
   }
-  for (const m of media.results) byId.get(m.post_id)?.media.push({ id: m.id, url: m.url });
+  const mediaById = new Map();
+  for (const m of media.results) {
+    const entry = { id: m.id, url: m.url, pets: [] };
+    mediaById.set(m.id, entry);
+    byId.get(m.post_id)?.media.push(entry);
+  }
+  for (const t of mediaTags.results) mediaById.get(t.media_id)?.pets.push({ id: t.id, name: t.name });
   for (const l of links.results) byId.get(l.post_id)?.pets.push({ id: l.id, name: l.name });
   let out = posts.results;
   if (idFilter) out = out.filter((p) => idFilter.has(p.id));
@@ -71,10 +78,24 @@ app.post('/api/posts', async (c) => {
     .map((pid) => c.env.DB.prepare('INSERT OR IGNORE INTO post_pets (post_id, pet_id) VALUES (?, ?)').bind(postId, pid));
   if (linkStmts.length) await c.env.DB.batch(linkStmts);
 
-  for (const file of photos) {
-    const saved = await saveFile(c.env, file);
-    await c.env.DB.prepare('INSERT INTO post_media (post_id, url, storage_key) VALUES (?, ?, ?)')
+  // Optional per-photo pet tags: a JSON array of pet-id arrays, aligned with
+  // the photos in upload order, e.g. [[1,2],[1]] for two photos.
+  let photoTags = [];
+  try {
+    const parsed = JSON.parse(form.get('photo_pets') || '[]');
+    if (Array.isArray(parsed)) photoTags = parsed;
+  } catch { /* ignore malformed tags — photos still save untagged */ }
+
+  for (let i = 0; i < photos.length; i++) {
+    const saved = await saveFile(c.env, photos[i]);
+    const { meta: mediaMeta } = await c.env.DB
+      .prepare('INSERT INTO post_media (post_id, url, storage_key) VALUES (?, ?, ?)')
       .bind(postId, saved.url, saved.key).run();
+    const tags = (Array.isArray(photoTags[i]) ? photoTags[i] : []).filter((pid) => validPets.has(String(pid)));
+    for (const pid of tags) {
+      await c.env.DB.prepare('INSERT OR IGNORE INTO media_pets (media_id, pet_id) VALUES (?, ?)')
+        .bind(mediaMeta.last_row_id, pid).run();
+    }
   }
 
   const [post] = await listPosts(c.env, null, postId);
@@ -87,6 +108,7 @@ app.delete('/api/posts/:id', async (c) => {
   if (!post) return c.json({ error: 'not found' }, 404);
   const media = await c.env.DB.prepare('SELECT storage_key FROM post_media WHERE post_id = ?').bind(id).all();
   await c.env.DB.batch([
+    c.env.DB.prepare('DELETE FROM media_pets WHERE media_id IN (SELECT id FROM post_media WHERE post_id = ?)').bind(id),
     c.env.DB.prepare('DELETE FROM post_media WHERE post_id = ?').bind(id),
     c.env.DB.prepare('DELETE FROM post_pets WHERE post_id = ?').bind(id),
     c.env.DB.prepare('DELETE FROM posts WHERE id = ?').bind(id),
