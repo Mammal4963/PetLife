@@ -247,6 +247,11 @@ async function openPostForm(defaultPetIds = [], post = null) {
   // Pets that can be tagged in individual photos (same set as "Who's in it?").
   const tagPets = pets.filter((p) => !p.passed_date || checkedIds.includes(p.id));
   const multiPet = tagPets.length > 1;
+  // Default tags for newly added photos: the timeline filter/post's pets,
+  // or every living pet on a fresh unfiltered post.
+  const defaultTagIds = checkedIds.length
+    ? checkedIds
+    : tagPets.filter((p) => !p.passed_date).map((p) => p.id);
   const tagChips = (activeIds) => tagPets.map((p) => `
     <button type="button" class="chip tag-chip ${activeIds.includes(p.id) ? 'active' : ''}"
       data-pet="${p.id}">${esc(p.name)}</button>`).join('');
@@ -282,13 +287,16 @@ async function openPostForm(defaultPetIds = [], post = null) {
 
   const modal = openModal(post ? 'Edit post' : 'New timeline post', `
     <form class="stack" id="post-form">
-      <label class="field" id="no-photo-date"><span>Date</span>
-        <input type="date" name="post_date" value="${esc(post?.post_date || today())}">
-        <small>Photos carry their own dates — this is only for posts without photos.</small>
-      </label>
       <label class="field"><span>Title (optional)</span><input type="text" name="title" value="${esc(post?.title || '')}" placeholder="First day home!"></label>
       <label class="field"><span>What happened?</span><textarea name="body" rows="3" placeholder="Tell the story…">${esc(post?.body || '')}</textarea></label>
-      <div class="field"><span>Who's in it?</span><div class="checks">${petChecks || '<em>Add a pet first to tag them</em>'}</div></div>
+      <div id="no-photo-fields" class="stack">
+        <label class="field"><span>Date</span>
+          <input type="date" name="post_date" value="${esc(post?.post_date || today())}">
+        </label>
+        <div class="field"><span>Who's in it?</span><div class="checks">${petChecks || '<em>Add a pet first to tag them</em>'}</div>
+          <small>With photos, the date and pets come from tagging each photo instead.</small>
+        </div>
+      </div>
       ${existingPhotos}
       <label class="field"><span>${post ? 'Add photos' : 'Photos'}</span><input type="file" name="photos" accept="image/*" multiple></label>
       <div id="photo-preview" class="preview-row"></div>
@@ -308,12 +316,12 @@ async function openPostForm(defaultPetIds = [], post = null) {
   const checkedPetIds = () =>
     [...form.querySelectorAll('input[name=pet_ids]:checked')].map((c) => Number(c.value));
 
-  // The plain date field only matters for posts without photos; photos carry
-  // their own dates and the post's range derives from them.
+  // The plain date field and pet checkboxes only matter for posts without
+  // photos; photos carry their own dates and tags, and the post derives both.
+  const hasPhotos = () => compressed.length > 0 ||
+    modal.querySelectorAll('#existing-photos .preview-photo:not(.removed)').length > 0;
   const updateDateVisibility = () => {
-    const hasPhotos = compressed.length > 0 ||
-      modal.querySelectorAll('#existing-photos .preview-photo:not(.removed)').length > 0;
-    modal.querySelector('#no-photo-date').classList.toggle('hidden', hasPhotos);
+    modal.querySelector('#no-photo-fields').classList.toggle('hidden', hasPhotos());
   };
   updateDateVisibility();
 
@@ -365,8 +373,8 @@ async function openPostForm(defaultPetIds = [], post = null) {
     previewUrls = compressed.map((f) => URL.createObjectURL(f));
 
     // Carousel: one big slide per photo — swipe or use the arrows, and tag
-    // who's in each one. Tags pre-set to the pets checked for the post.
-    const defaults = checkedPetIds();
+    // who's in each one.
+    const defaults = defaultTagIds;
     preview.innerHTML = `
       <div class="carousel-track">
         ${compressed.map((f, i) => `
@@ -397,13 +405,13 @@ async function openPostForm(defaultPetIds = [], post = null) {
         fd.append(name, form.elements[name].value);
       }
       // Per-photo tags and dates for new photos; without toggles (single
-      // pet), every photo inherits the post's checked pets.
+      // pet), every photo gets the default pets.
       const tagRows = [...preview.querySelectorAll('.photo-tag-chips')];
       const photoTags = compressed.map((_, i) => {
         const row = tagRows.find((r) => Number(r.dataset.photo) === i);
         return row
           ? [...row.querySelectorAll('.tag-chip.active')].map((c) => Number(c.dataset.pet))
-          : checkedPetIds();
+          : defaultTagIds;
       });
       fd.append('photo_pets', JSON.stringify(photoTags));
       const photoDates = compressed.map((_, i) => {
@@ -433,11 +441,16 @@ async function openPostForm(defaultPetIds = [], post = null) {
         fd.append('media_dates', JSON.stringify(mediaDates));
       }
 
-      // The post is tagged with everyone who appears in it — checked boxes
-      // plus anyone tagged in a photo — so pet timelines stay complete.
-      const postPets = new Set(checkedPetIds());
+      // The post is tagged with everyone who appears in its photos; the
+      // checkboxes only apply to photo-less posts.
+      const postPets = new Set();
       photoTags.flat().forEach((id) => postPets.add(id));
       Object.values(mediaTags).flat().forEach((id) => postPets.add(id));
+      if (!hasPhotos()) checkedPetIds().forEach((id) => postPets.add(id));
+      // Single-pet households render no chips, so keep the post's pets.
+      if (!postPets.size && !multiPet) {
+        (post ? post.pets.map((p) => p.id) : defaultTagIds).forEach((id) => postPets.add(id));
+      }
       postPets.forEach((id) => fd.append('pet_ids', id));
 
       for (const f of compressed) fd.append('photos', f, f.name);
