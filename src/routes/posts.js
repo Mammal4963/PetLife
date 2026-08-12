@@ -44,7 +44,7 @@ function parsePhotoDates(raw, count, fallbackDate) {
 function loadPost(id) {
   const post = db.prepare('SELECT * FROM posts WHERE id = ?').get(id);
   if (!post) return null;
-  post.media = db.prepare('SELECT id, url, media_date FROM post_media WHERE post_id = ? ORDER BY media_date, id').all(id)
+  post.media = db.prepare('SELECT id, url, media_date FROM post_media WHERE post_id = ? ORDER BY media_date DESC, id DESC').all(id)
     .map((m) => ({
       ...m,
       pets: db.prepare(

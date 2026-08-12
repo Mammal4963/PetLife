@@ -47,7 +47,7 @@ async function listPosts(env, petId, onlyPostId) {
   }
   const [posts, media, links, mediaTags] = await env.DB.batch([
     env.DB.prepare('SELECT * FROM posts ORDER BY post_date DESC, id DESC'),
-    env.DB.prepare('SELECT id, post_id, url, media_date FROM post_media ORDER BY media_date, id'),
+    env.DB.prepare('SELECT id, post_id, url, media_date FROM post_media ORDER BY media_date DESC, id DESC'),
     env.DB.prepare('SELECT pp.post_id AS post_id, p.id AS id, p.name AS name FROM post_pets pp JOIN pets p ON p.id = pp.pet_id ORDER BY p.name'),
     env.DB.prepare('SELECT mp.media_id AS media_id, p.id AS id, p.name AS name FROM media_pets mp JOIN pets p ON p.id = mp.pet_id ORDER BY p.name'),
   ]);
