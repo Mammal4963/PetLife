@@ -313,25 +313,61 @@ async function openPostForm(defaultPetIds = [], post = null) {
     }
   });
 
+  let previewUrls = [];
   fileInput.addEventListener('change', async () => {
-    preview.innerHTML = '<em>Compressing photos…</em>';
     compressed = [];
     const files = [...fileInput.files];
+    if (!files.length) {
+      preview.innerHTML = '';
+      updateDateVisibility();
+      return;
+    }
     // Each photo carries its own date, read from the original file's
     // metadata before compression strips it (editable below).
     const detectedDates = await Promise.all(files.map(readPhotoDate));
-    for (const file of files) {
-      compressed.push(await compressImage(file));
+    for (let i = 0; i < files.length; i++) {
+      preview.innerHTML = `<em>Compressing photos… ${i + 1} / ${files.length}</em>`;
+      compressed.push(await compressImage(files[i]));
     }
-    // With more than one taggable pet, each photo gets its own who's-in-this-one
-    // toggles, pre-set to the pets checked for the post.
+    previewUrls.forEach((u) => URL.revokeObjectURL(u));
+    previewUrls = compressed.map((f) => URL.createObjectURL(f));
+
+    // Carousel: one big slide per photo — swipe or use the arrows, and tag
+    // who's in each one. Tags pre-set to the pets checked for the post.
     const defaults = checkedPetIds();
-    preview.innerHTML = compressed.map((f, i) => `
-      <div class="preview-photo">
-        <span class="preview-chip">📷 ${esc(f.name)} <small>${(f.size / 1024).toFixed(0)} KB</small></span>
-        <input type="date" class="photo-date" data-photo="${i}" value="${esc(detectedDates[i] || today())}" title="When this photo was taken">
-        ${multiPet ? `<span class="photo-tag-chips" data-photo="${i}">${tagChips(defaults)}</span>` : ''}
-      </div>`).join('');
+    preview.innerHTML = `
+      <div class="carousel-track">
+        ${compressed.map((f, i) => `
+          <figure class="carousel-slide" data-photo="${i}">
+            <img src="${previewUrls[i]}" alt="">
+            <figcaption class="slide-controls">
+              ${multiPet ? `<span class="photo-tag-chips" data-photo="${i}">${tagChips(defaults)}</span>` : ''}
+              <span class="slide-meta">
+                <input type="date" class="photo-date" data-photo="${i}" value="${esc(detectedDates[i] || today())}" title="When this photo was taken">
+                <small>📷 ${esc(f.name)} · ${(f.size / 1024).toFixed(0)} KB</small>
+              </span>
+            </figcaption>
+          </figure>`).join('')}
+      </div>
+      ${compressed.length > 1 ? `
+        <div class="carousel-nav">
+          <button type="button" class="btn small" data-car-prev>‹ Prev</button>
+          <span class="carousel-counter">1 / ${compressed.length}</span>
+          <button type="button" class="btn small" data-car-next>Next ›</button>
+        </div>` : ''}`;
+
+    const track = preview.querySelector('.carousel-track');
+    const counter = preview.querySelector('.carousel-counter');
+    if (counter) {
+      track.addEventListener('scroll', () => {
+        const idx = Math.min(Math.round(track.scrollLeft / track.clientWidth) + 1, compressed.length);
+        counter.textContent = `${idx} / ${compressed.length}`;
+      }, { passive: true });
+      preview.querySelector('[data-car-prev]').onclick = () =>
+        track.scrollBy({ left: -track.clientWidth, behavior: 'smooth' });
+      preview.querySelector('[data-car-next]').onclick = () =>
+        track.scrollBy({ left: track.clientWidth, behavior: 'smooth' });
+    }
     updateDateVisibility();
   });
 
