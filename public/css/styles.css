@@ -358,6 +358,7 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); bo
 .tag-chip { font-size: 0.75rem; padding: 0.08rem 0.55rem; cursor: pointer; opacity: 0.6; }
 .tag-chip.active { opacity: 1; }
 .edit-thumb { width: 54px; height: 54px; object-fit: cover; border-radius: 8px; flex-shrink: 0; }
+.preview-photo input.photo-date { width: auto; font-size: 0.8rem; padding: 0.25rem 0.5rem; }
 .preview-photo.removed .edit-thumb { filter: grayscale(1); }
 .preview-photo.removed { opacity: 0.45; }
 .preview-photo.removed .photo-tag-chips { pointer-events: none; }

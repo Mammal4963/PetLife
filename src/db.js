@@ -127,6 +127,17 @@ if (!postCols.includes('post_date_end')) {
   db.exec('ALTER TABLE posts ADD COLUMN post_date_end TEXT');
 }
 
+// Upgrade post_media tables created before per-photo dates existed
+// (mirrors migrations/0006_media_dates.sql for the Workers backend).
+const mediaCols = db.prepare('PRAGMA table_info(post_media)').all().map((c) => c.name);
+if (!mediaCols.includes('media_date')) {
+  db.exec(`
+    ALTER TABLE post_media ADD COLUMN media_date TEXT;
+    UPDATE post_media SET media_date = (SELECT post_date FROM posts WHERE posts.id = post_media.post_id)
+      WHERE media_date IS NULL;
+  `);
+}
+
 // Upgrade share_links tables created before the scope column existed
 // (mirrors migrations/0003_share_scope.sql for the Workers backend).
 const shareCols = db.prepare('PRAGMA table_info(share_links)').all().map((c) => c.name);

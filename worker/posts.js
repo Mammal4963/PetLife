@@ -12,14 +12,30 @@ export function youtubeId(url) {
   return m ? m[1] : null;
 }
 
-// Normalize a start/end pair: blank or same-day end collapses to null,
-// reversed dates swap.
-function dateRange(start, endRaw) {
-  let s = start;
-  let end = endRaw && String(endRaw).trim() ? String(endRaw) : null;
-  if (end && s && end < s) [s, end] = [end, s];
-  if (end === s) end = null;
-  return { start: s, end };
+const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s || '');
+const todayIso = () => new Date().toISOString().slice(0, 10);
+
+// A post's dates derive from its photos: start = earliest, end = latest
+// (null when a single day). Photo-less posts fall back to the given date.
+function deriveRange(photoDates, fallbackDate) {
+  if (photoDates.length) {
+    const sorted = [...photoDates].sort();
+    const start = sorted[0];
+    const end = sorted[sorted.length - 1];
+    return { start, end: end !== start ? end : null };
+  }
+  return { start: isDate(fallbackDate) ? fallbackDate : todayIso(), end: null };
+}
+
+// Parse the client's per-photo date list, one valid date per photo.
+function parsePhotoDates(raw, count, fallbackDate) {
+  let dates = [];
+  try {
+    const parsed = JSON.parse(raw || '[]');
+    if (Array.isArray(parsed)) dates = parsed;
+  } catch { /* ignore */ }
+  const fallback = isDate(fallbackDate) ? fallbackDate : todayIso();
+  return Array.from({ length: count }, (_, i) => (isDate(dates[i]) ? dates[i] : fallback));
 }
 
 async function listPosts(env, petId, onlyPostId) {
@@ -31,7 +47,7 @@ async function listPosts(env, petId, onlyPostId) {
   }
   const [posts, media, links, mediaTags] = await env.DB.batch([
     env.DB.prepare('SELECT * FROM posts ORDER BY post_date DESC, id DESC'),
-    env.DB.prepare('SELECT id, post_id, url FROM post_media ORDER BY id'),
+    env.DB.prepare('SELECT id, post_id, url, media_date FROM post_media ORDER BY media_date, id'),
     env.DB.prepare('SELECT pp.post_id AS post_id, p.id AS id, p.name AS name FROM post_pets pp JOIN pets p ON p.id = pp.pet_id ORDER BY p.name'),
     env.DB.prepare('SELECT mp.media_id AS media_id, p.id AS id, p.name AS name FROM media_pets mp JOIN pets p ON p.id = mp.pet_id ORDER BY p.name'),
   ]);
@@ -44,7 +60,7 @@ async function listPosts(env, petId, onlyPostId) {
   }
   const mediaById = new Map();
   for (const m of media.results) {
-    const entry = { id: m.id, url: m.url, pets: [] };
+    const entry = { id: m.id, url: m.url, media_date: m.media_date, pets: [] };
     mediaById.set(m.id, entry);
     byId.get(m.post_id)?.media.push(entry);
   }
@@ -68,14 +84,15 @@ app.post('/api/posts', async (c) => {
   const youtube_url = form.get('youtube_url') || null;
   const photos = form.getAll('photos').filter((f) => typeof f === 'object' && f.size && f.type.startsWith('image/'));
 
-  if (!post_date) return c.json({ error: 'Date is required' }, 400);
+  if (!photos.length && !isDate(post_date)) return c.json({ error: 'Date is required' }, 400);
   if (youtube_url && !youtubeId(youtube_url)) {
     return c.json({ error: "That doesn't look like a YouTube link" }, 400);
   }
   const hasContent = (title && title.trim()) || (body && body.trim()) || youtube_url || photos.length;
   if (!hasContent) return c.json({ error: 'Add a photo, video link, or some text' }, 400);
 
-  const range = dateRange(post_date, form.get('post_date_end'));
+  const photoDates = parsePhotoDates(form.get('photo_dates'), photos.length, post_date);
+  const range = deriveRange(photoDates, post_date);
   const { meta } = await c.env.DB
     .prepare('INSERT INTO posts (title, body, post_date, post_date_end, youtube_url) VALUES (?, ?, ?, ?, ?)')
     .bind(title, body, range.start, range.end, youtube_url).run();
@@ -100,8 +117,8 @@ app.post('/api/posts', async (c) => {
   for (let i = 0; i < photos.length; i++) {
     const saved = await saveFile(c.env, photos[i]);
     const { meta: mediaMeta } = await c.env.DB
-      .prepare('INSERT INTO post_media (post_id, url, storage_key) VALUES (?, ?, ?)')
-      .bind(postId, saved.url, saved.key).run();
+      .prepare('INSERT INTO post_media (post_id, url, storage_key, media_date) VALUES (?, ?, ?, ?)')
+      .bind(postId, saved.url, saved.key, photoDates[i]).run();
     const tags = (Array.isArray(photoTags[i]) ? photoTags[i] : []).filter((pid) => validPets.has(String(pid)));
     for (const pid of tags) {
       await c.env.DB.prepare('INSERT OR IGNORE INTO media_pets (media_id, pet_id) VALUES (?, ?)')
@@ -115,22 +132,21 @@ app.post('/api/posts', async (c) => {
 
 app.put('/api/posts/:id', async (c) => {
   const id = Number(c.req.param('id'));
-  if (!(await c.env.DB.prepare('SELECT id FROM posts WHERE id = ?').bind(id).first())) {
-    return c.json({ error: 'not found' }, 404);
-  }
+  const existing = await c.env.DB.prepare('SELECT id, post_date FROM posts WHERE id = ?').bind(id).first();
+  if (!existing) return c.json({ error: 'not found' }, 404);
   const form = await c.req.formData();
   const title = form.get('title') || null;
   const body = form.get('body') || null;
-  const post_date = form.get('post_date');
+  // Fallback date for photo-less posts: the submitted date, else the current one.
+  const post_date = isDate(form.get('post_date')) ? form.get('post_date') : existing.post_date;
   const youtube_url = form.get('youtube_url') || null;
-  if (!post_date) return c.json({ error: 'Date is required' }, 400);
   if (youtube_url && !youtubeId(youtube_url)) {
     return c.json({ error: "That doesn't look like a YouTube link" }, 400);
   }
-  const range = dateRange(post_date, form.get('post_date_end'));
+  // Dates are derived from photos at the end, once photo edits are applied.
   await c.env.DB
-    .prepare('UPDATE posts SET title = ?, body = ?, post_date = ?, post_date_end = ?, youtube_url = ? WHERE id = ?')
-    .bind(title, body, range.start, range.end, youtube_url, id).run();
+    .prepare('UPDATE posts SET title = ?, body = ?, youtube_url = ? WHERE id = ?')
+    .bind(title, body, youtube_url, id).run();
 
   const validPets = new Set(
     (await c.env.DB.prepare('SELECT id FROM pets').all()).results.map((p) => String(p.id)),
@@ -165,11 +181,17 @@ app.put('/api/posts/:id', async (c) => {
     }
   }
 
-  // Re-tag remaining photos: {media_id: [pet_ids]} replaces each photo's tags.
+  // Re-tag and re-date remaining photos: {media_id: [pet_ids]} replaces each
+  // photo's tags; {media_id: 'YYYY-MM-DD'} replaces its date.
   let mediaTags = {};
   try {
     const parsed = JSON.parse(form.get('media_pets') || '{}');
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) mediaTags = parsed;
+  } catch { /* ignore */ }
+  let mediaDates = {};
+  try {
+    const parsed = JSON.parse(form.get('media_dates') || '{}');
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) mediaDates = parsed;
   } catch { /* ignore */ }
   const owned = await c.env.DB.prepare('SELECT id FROM post_media WHERE post_id = ?').bind(id).all();
   const ownedIds = new Set(owned.results.map((m) => m.id));
@@ -182,25 +204,38 @@ app.put('/api/posts/:id', async (c) => {
         .bind(mediaId, pid).run();
     }
   }
+  for (const [mid, date] of Object.entries(mediaDates)) {
+    const mediaId = Number(mid);
+    if (!ownedIds.has(mediaId) || !isDate(date)) continue;
+    await c.env.DB.prepare('UPDATE post_media SET media_date = ? WHERE id = ?').bind(date, mediaId).run();
+  }
 
-  // New photos, tagged the same way as on create.
+  // New photos, tagged and dated the same way as on create.
   const photos = form.getAll('photos').filter((f) => typeof f === 'object' && f.size && f.type.startsWith('image/'));
   let photoTags = [];
   try {
     const parsed = JSON.parse(form.get('photo_pets') || '[]');
     if (Array.isArray(parsed)) photoTags = parsed;
   } catch { /* ignore */ }
+  const photoDates = parsePhotoDates(form.get('photo_dates'), photos.length, post_date);
   for (let i = 0; i < photos.length; i++) {
     const saved = await saveFile(c.env, photos[i]);
     const { meta: mediaMeta } = await c.env.DB
-      .prepare('INSERT INTO post_media (post_id, url, storage_key) VALUES (?, ?, ?)')
-      .bind(id, saved.url, saved.key).run();
+      .prepare('INSERT INTO post_media (post_id, url, storage_key, media_date) VALUES (?, ?, ?, ?)')
+      .bind(id, saved.url, saved.key, photoDates[i]).run();
     const tags = (Array.isArray(photoTags[i]) ? photoTags[i] : []).filter((pid) => validPets.has(String(pid)));
     for (const pid of tags) {
       await c.env.DB.prepare('INSERT OR IGNORE INTO media_pets (media_id, pet_id) VALUES (?, ?)')
         .bind(mediaMeta.last_row_id, pid).run();
     }
   }
+
+  // Derive the post's dates from its photos (or the form date if photo-less).
+  const remaining = await c.env.DB
+    .prepare('SELECT media_date FROM post_media WHERE post_id = ?').bind(id).all();
+  const range = deriveRange(remaining.results.map((m) => m.media_date).filter(isDate), post_date);
+  await c.env.DB.prepare('UPDATE posts SET post_date = ?, post_date_end = ? WHERE id = ?')
+    .bind(range.start, range.end, id).run();
 
   const [post] = await listPosts(c.env, null, id);
   return c.json(post);

@@ -257,6 +257,7 @@ async function openPostForm(defaultPetIds = [], post = null) {
         ${post.media.map((m) => `
           <div class="preview-photo" data-media="${m.id}">
             <img class="edit-thumb" src="${esc(m.url)}" alt="">
+            <input type="date" class="photo-date" data-media-date="${m.id}" value="${esc(m.media_date || post.post_date)}" title="When this photo was taken">
             ${multiPet ? `<span class="photo-tag-chips" data-media-chips="${m.id}">
               ${tagChips((m.pets || []).map((p) => p.id))}
             </span>` : ''}
@@ -267,11 +268,10 @@ async function openPostForm(defaultPetIds = [], post = null) {
 
   const modal = openModal(post ? 'Edit post' : 'New timeline post', `
     <form class="stack" id="post-form">
-      <div class="two-col">
-        <label class="field"><span>Date</span><input type="date" name="post_date" value="${esc(post?.post_date || today())}" required></label>
-        <label class="field"><span>to (optional)</span><input type="date" name="post_date_end" value="${esc(post?.post_date_end || '')}"></label>
-      </div>
-      <small id="date-hint"></small>
+      <label class="field" id="no-photo-date"><span>Date</span>
+        <input type="date" name="post_date" value="${esc(post?.post_date || today())}">
+        <small>Photos carry their own dates — this is only for posts without photos.</small>
+      </label>
       <label class="field"><span>Title (optional)</span><input type="text" name="title" value="${esc(post?.title || '')}" placeholder="First day home!"></label>
       <label class="field"><span>What happened?</span><textarea name="body" rows="3" placeholder="Tell the story…">${esc(post?.body || '')}</textarea></label>
       <div class="field"><span>Who's in it?</span><div class="checks">${petChecks || '<em>Add a pet first to tag them</em>'}</div></div>
@@ -291,41 +291,35 @@ async function openPostForm(defaultPetIds = [], post = null) {
   const preview = modal.querySelector('#photo-preview');
   let compressed = [];
 
-  const dateInput = form.elements.post_date;
-  const dateEndInput = form.elements.post_date_end;
-  const dateHint = modal.querySelector('#date-hint');
-  // When editing, the dates are already deliberate — never overwrite them.
-  let dateTouched = Boolean(post);
-  const markTouched = () => { dateTouched = true; dateHint.textContent = ''; };
-  dateInput.addEventListener('input', markTouched);
-  dateEndInput.addEventListener('input', markTouched);
-
   const checkedPetIds = () =>
     [...form.querySelectorAll('input[name=pet_ids]:checked')].map((c) => Number(c.value));
+
+  // The plain date field only matters for posts without photos; photos carry
+  // their own dates and the post's range derives from them.
+  const updateDateVisibility = () => {
+    const hasPhotos = compressed.length > 0 ||
+      modal.querySelectorAll('#existing-photos .preview-photo:not(.removed)').length > 0;
+    modal.querySelector('#no-photo-date').classList.toggle('hidden', hasPhotos);
+  };
+  updateDateVisibility();
 
   modal.addEventListener('click', (e) => {
     const chip = e.target.closest('.tag-chip');
     if (chip) chip.classList.toggle('active');
     const remove = e.target.closest('[data-remove-media]');
-    if (remove) remove.closest('.preview-photo').classList.toggle('removed');
+    if (remove) {
+      remove.closest('.preview-photo').classList.toggle('removed');
+      updateDateVisibility();
+    }
   });
 
   fileInput.addEventListener('change', async () => {
     preview.innerHTML = '<em>Compressing photos…</em>';
     compressed = [];
     const files = [...fileInput.files];
-    // Date the post to when the photos were taken — a single day, or the
-    // span of days if the photos range — unless the user already picked dates.
-    const dates = (await Promise.all(files.map(readPhotoDate))).filter(Boolean).sort();
-    if (dates.length && !dateTouched) {
-      const first = dates[0];
-      const last = dates[dates.length - 1];
-      dateInput.value = first;
-      dateEndInput.value = last !== first ? last : '';
-      dateHint.textContent = last !== first
-        ? "📷 Date range set from the photos' dates taken"
-        : "📷 Date set from the photos' date taken";
-    }
+    // Each photo carries its own date, read from the original file's
+    // metadata before compression strips it (editable below).
+    const detectedDates = await Promise.all(files.map(readPhotoDate));
     for (const file of files) {
       compressed.push(await compressImage(file));
     }
@@ -335,8 +329,10 @@ async function openPostForm(defaultPetIds = [], post = null) {
     preview.innerHTML = compressed.map((f, i) => `
       <div class="preview-photo">
         <span class="preview-chip">📷 ${esc(f.name)} <small>${(f.size / 1024).toFixed(0)} KB</small></span>
+        <input type="date" class="photo-date" data-photo="${i}" value="${esc(detectedDates[i] || today())}" title="When this photo was taken">
         ${multiPet ? `<span class="photo-tag-chips" data-photo="${i}">${tagChips(defaults)}</span>` : ''}
       </div>`).join('');
+    updateDateVisibility();
   });
 
   form.addEventListener('submit', async (e) => {
@@ -346,11 +342,11 @@ async function openPostForm(defaultPetIds = [], post = null) {
     btn.textContent = post ? 'Saving…' : 'Posting…';
     try {
       const fd = new FormData();
-      for (const name of ['post_date', 'post_date_end', 'title', 'body', 'youtube_url']) {
+      for (const name of ['post_date', 'title', 'body', 'youtube_url']) {
         fd.append(name, form.elements[name].value);
       }
-      // Per-photo tags for new photos; without toggles (single pet), every
-      // photo inherits the post's checked pets.
+      // Per-photo tags and dates for new photos; without toggles (single
+      // pet), every photo inherits the post's checked pets.
       const tagRows = [...preview.querySelectorAll('.photo-tag-chips')];
       const photoTags = compressed.map((_, i) => {
         const row = tagRows.find((r) => Number(r.dataset.photo) === i);
@@ -359,9 +355,15 @@ async function openPostForm(defaultPetIds = [], post = null) {
           : checkedPetIds();
       });
       fd.append('photo_pets', JSON.stringify(photoTags));
+      const photoDates = compressed.map((_, i) => {
+        const inp = preview.querySelector(`.photo-date[data-photo="${i}"]`);
+        return inp && inp.value ? inp.value : today();
+      });
+      fd.append('photo_dates', JSON.stringify(photoDates));
 
-      // Existing photos (edit only): removals and updated tags.
+      // Existing photos (edit only): removals, updated tags, updated dates.
       const mediaTags = {};
+      const mediaDates = {};
       const removeMedia = [];
       modal.querySelectorAll('#existing-photos .preview-photo').forEach((row) => {
         const mid = Number(row.dataset.media);
@@ -371,10 +373,13 @@ async function openPostForm(defaultPetIds = [], post = null) {
         }
         const chips = row.querySelector('[data-media-chips]');
         if (chips) mediaTags[mid] = [...chips.querySelectorAll('.tag-chip.active')].map((c) => Number(c.dataset.pet));
+        const dinp = row.querySelector('[data-media-date]');
+        if (dinp && dinp.value) mediaDates[mid] = dinp.value;
       });
       if (post) {
         fd.append('remove_media', JSON.stringify(removeMedia));
         fd.append('media_pets', JSON.stringify(mediaTags));
+        fd.append('media_dates', JSON.stringify(mediaDates));
       }
 
       // The post is tagged with everyone who appears in it — checked boxes

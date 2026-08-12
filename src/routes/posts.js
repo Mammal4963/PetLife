@@ -4,7 +4,7 @@ const { db } = require('../db');
 const { saveFile, deleteFile } = require('../storage');
 
 const router = express.Router();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024, files: 12 } });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024, files: 100 } });
 
 // Accepts full YouTube URLs, youtu.be links, or Shorts links; returns the video id or null.
 function youtubeId(url) {
@@ -15,20 +15,36 @@ function youtubeId(url) {
   return m ? m[1] : null;
 }
 
-// Normalize a start/end pair: blank or same-day end collapses to null,
-// reversed dates swap.
-function dateRange(start, endRaw) {
-  let s = start;
-  let end = endRaw && String(endRaw).trim() ? String(endRaw) : null;
-  if (end && s && end < s) [s, end] = [end, s];
-  if (end === s) end = null;
-  return { start: s, end };
+const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s || '');
+const todayIso = () => new Date().toISOString().slice(0, 10);
+
+// A post's dates derive from its photos: start = earliest, end = latest
+// (null when a single day). Photo-less posts fall back to the given date.
+function deriveRange(photoDates, fallbackDate) {
+  if (photoDates.length) {
+    const sorted = [...photoDates].sort();
+    const start = sorted[0];
+    const end = sorted[sorted.length - 1];
+    return { start, end: end !== start ? end : null };
+  }
+  return { start: isDate(fallbackDate) ? fallbackDate : todayIso(), end: null };
+}
+
+// Parse the client's per-photo date list, one valid date per photo.
+function parsePhotoDates(raw, count, fallbackDate) {
+  let dates = [];
+  try {
+    const parsed = JSON.parse(raw || '[]');
+    if (Array.isArray(parsed)) dates = parsed;
+  } catch { /* ignore */ }
+  const fallback = isDate(fallbackDate) ? fallbackDate : todayIso();
+  return Array.from({ length: count }, (_, i) => (isDate(dates[i]) ? dates[i] : fallback));
 }
 
 function loadPost(id) {
   const post = db.prepare('SELECT * FROM posts WHERE id = ?').get(id);
   if (!post) return null;
-  post.media = db.prepare('SELECT id, url FROM post_media WHERE post_id = ? ORDER BY id').all(id)
+  post.media = db.prepare('SELECT id, url, media_date FROM post_media WHERE post_id = ? ORDER BY media_date, id').all(id)
     .map((m) => ({
       ...m,
       pets: db.prepare(
@@ -57,14 +73,16 @@ router.get('/api/posts', (req, res) => {
 
 router.post('/api/posts', upload.array('photos'), async (req, res) => {
   const { title, body, post_date, youtube_url } = req.body;
-  if (!post_date) return res.status(400).json({ error: 'Date is required' });
+  const imageFiles = (req.files || []).filter((f) => f.mimetype.startsWith('image/'));
+  if (!imageFiles.length && !isDate(post_date)) return res.status(400).json({ error: 'Date is required' });
   if (youtube_url && !youtubeId(youtube_url)) {
     return res.status(400).json({ error: "That doesn't look like a YouTube link" });
   }
-  const hasContent = (title && title.trim()) || (body && body.trim()) || youtube_url || (req.files && req.files.length);
+  const hasContent = (title && title.trim()) || (body && body.trim()) || youtube_url || imageFiles.length;
   if (!hasContent) return res.status(400).json({ error: 'Add a photo, video link, or some text' });
 
-  const range = dateRange(post_date, req.body.post_date_end);
+  const photoDates = parsePhotoDates(req.body.photo_dates, imageFiles.length, post_date);
+  const range = deriveRange(photoDates, post_date);
   const info = db.prepare('INSERT INTO posts (title, body, post_date, post_date_end, youtube_url) VALUES (?, ?, ?, ?, ?)')
     .run(title || null, body || null, range.start, range.end, youtube_url || null);
   const postId = info.lastInsertRowid;
@@ -84,13 +102,12 @@ router.post('/api/posts', upload.array('photos'), async (req, res) => {
     if (Array.isArray(parsed)) photoTags = parsed;
   } catch { /* ignore malformed tags — photos still save untagged */ }
 
-  const insertMedia = db.prepare('INSERT INTO post_media (post_id, url, storage_key) VALUES (?, ?, ?)');
+  const insertMedia = db.prepare('INSERT INTO post_media (post_id, url, storage_key, media_date) VALUES (?, ?, ?, ?)');
   const tagMedia = db.prepare('INSERT OR IGNORE INTO media_pets (media_id, pet_id) VALUES (?, ?)');
   let photoIndex = 0;
-  for (const file of req.files || []) {
-    if (!file.mimetype.startsWith('image/')) continue;
+  for (const file of imageFiles) {
     const saved = await saveFile(file.buffer, file.originalname, file.mimetype);
-    const mediaId = insertMedia.run(postId, saved.url, saved.key).lastInsertRowid;
+    const mediaId = insertMedia.run(postId, saved.url, saved.key, photoDates[photoIndex]).lastInsertRowid;
     const tags = Array.isArray(photoTags[photoIndex]) ? photoTags[photoIndex] : [];
     for (const pid of tags) {
       if (db.prepare('SELECT id FROM pets WHERE id = ?').get(pid)) tagMedia.run(mediaId, pid);
@@ -103,17 +120,17 @@ router.post('/api/posts', upload.array('photos'), async (req, res) => {
 
 router.put('/api/posts/:id', upload.array('photos'), async (req, res) => {
   const id = Number(req.params.id);
-  if (!db.prepare('SELECT id FROM posts WHERE id = ?').get(id)) {
-    return res.status(404).json({ error: 'not found' });
-  }
-  const { title, body, post_date, youtube_url } = req.body;
-  if (!post_date) return res.status(400).json({ error: 'Date is required' });
+  const existing = db.prepare('SELECT id, post_date FROM posts WHERE id = ?').get(id);
+  if (!existing) return res.status(404).json({ error: 'not found' });
+  const { title, body, youtube_url } = req.body;
+  // Fallback date for photo-less posts: the submitted date, else the current one.
+  const post_date = isDate(req.body.post_date) ? req.body.post_date : existing.post_date;
   if (youtube_url && !youtubeId(youtube_url)) {
     return res.status(400).json({ error: "That doesn't look like a YouTube link" });
   }
-  const range = dateRange(post_date, req.body.post_date_end);
-  db.prepare('UPDATE posts SET title = ?, body = ?, post_date = ?, post_date_end = ?, youtube_url = ? WHERE id = ?')
-    .run(title || null, body || null, range.start, range.end, youtube_url || null, id);
+  // Dates are derived from photos at the end, once photo edits are applied.
+  db.prepare('UPDATE posts SET title = ?, body = ?, youtube_url = ? WHERE id = ?')
+    .run(title || null, body || null, youtube_url || null, id);
 
   // Post-level pets: replace with the submitted set.
   db.prepare('DELETE FROM post_pets WHERE post_id = ?').run(id);
@@ -137,11 +154,17 @@ router.put('/api/posts/:id', upload.array('photos'), async (req, res) => {
     await deleteFile(m.storage_key);
   }
 
-  // Re-tag remaining photos: {media_id: [pet_ids]} replaces each photo's tags.
+  // Re-tag and re-date remaining photos: {media_id: [pet_ids]} replaces each
+  // photo's tags; {media_id: 'YYYY-MM-DD'} replaces its date.
   let mediaTags = {};
   try {
     const parsed = JSON.parse(req.body.media_pets || '{}');
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) mediaTags = parsed;
+  } catch { /* ignore */ }
+  let mediaDates = {};
+  try {
+    const parsed = JSON.parse(req.body.media_dates || '{}');
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) mediaDates = parsed;
   } catch { /* ignore */ }
   const tagMedia = db.prepare('INSERT OR IGNORE INTO media_pets (media_id, pet_id) VALUES (?, ?)');
   for (const [mid, pids] of Object.entries(mediaTags)) {
@@ -152,25 +175,36 @@ router.put('/api/posts/:id', upload.array('photos'), async (req, res) => {
       if (db.prepare('SELECT id FROM pets WHERE id = ?').get(pid)) tagMedia.run(m.id, pid);
     }
   }
+  for (const [mid, date] of Object.entries(mediaDates)) {
+    if (!isDate(date)) continue;
+    db.prepare('UPDATE post_media SET media_date = ? WHERE id = ? AND post_id = ?').run(date, Number(mid), id);
+  }
 
-  // New photos, tagged the same way as on create.
+  // New photos, tagged and dated the same way as on create.
   let photoTags = [];
   try {
     const parsed = JSON.parse(req.body.photo_pets || '[]');
     if (Array.isArray(parsed)) photoTags = parsed;
   } catch { /* ignore */ }
-  const insertMedia = db.prepare('INSERT INTO post_media (post_id, url, storage_key) VALUES (?, ?, ?)');
+  const newImages = (req.files || []).filter((f) => f.mimetype.startsWith('image/'));
+  const photoDates = parsePhotoDates(req.body.photo_dates, newImages.length, post_date);
+  const insertMedia = db.prepare('INSERT INTO post_media (post_id, url, storage_key, media_date) VALUES (?, ?, ?, ?)');
   let photoIndex = 0;
-  for (const file of req.files || []) {
-    if (!file.mimetype.startsWith('image/')) continue;
+  for (const file of newImages) {
     const saved = await saveFile(file.buffer, file.originalname, file.mimetype);
-    const mediaId = insertMedia.run(id, saved.url, saved.key).lastInsertRowid;
+    const mediaId = insertMedia.run(id, saved.url, saved.key, photoDates[photoIndex]).lastInsertRowid;
     const tags = Array.isArray(photoTags[photoIndex]) ? photoTags[photoIndex] : [];
     for (const pid of tags) {
       if (db.prepare('SELECT id FROM pets WHERE id = ?').get(pid)) tagMedia.run(mediaId, pid);
     }
     photoIndex++;
   }
+
+  // Derive the post's dates from its photos (or the form date if photo-less).
+  const remaining = db.prepare('SELECT media_date FROM post_media WHERE post_id = ?').all(id)
+    .map((m) => m.media_date).filter(isDate);
+  const range = deriveRange(remaining, post_date);
+  db.prepare('UPDATE posts SET post_date = ?, post_date_end = ? WHERE id = ?').run(range.start, range.end, id);
 
   res.json(loadPost(id));
 });
