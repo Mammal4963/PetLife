@@ -22,6 +22,19 @@ function fmtDateRange(start, end) {
   return end && end !== start ? `${fmtDate(start)} – ${fmtDate(end)}` : fmtDate(start);
 }
 
+// Imperial weights display as pounds + remainder ounces ("8 lbs 3 oz").
+function fmtWeight(value, unit) {
+  const v = Number(value);
+  if (!Number.isFinite(v)) return `${value} ${unit}`;
+  if (unit === 'kg') return `${v} kg`;
+  let totalOz = Math.round(unit === 'oz' ? v : v * 16);
+  const lbs = Math.floor(totalOz / 16);
+  const oz = totalOz % 16;
+  if (!lbs) return `${oz} oz`;
+  const lbPart = `${lbs} ${lbs === 1 ? 'lb' : 'lbs'}`;
+  return oz ? `${lbPart} ${oz} oz` : lbPart;
+}
+
 function today() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -795,7 +808,7 @@ async function renderPetDetail(id) {
 
     ${medTable('Weight log', '⚖️', pet.weights, [
       { key: 'weigh_date', label: 'Date', fmt: fmtDate },
-      { key: 'weight', label: 'Weight', fmt: (v, r) => `${v} ${r.unit}` },
+      { key: 'weight', label: 'Weight', fmt: (v, r) => fmtWeight(v, r.unit) },
     ], 'Add weight', 'weight', 'weights')}
 
     <section class="card med-section">
