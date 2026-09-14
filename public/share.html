@@ -42,6 +42,28 @@
       return new Date(y, m - 1, d).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
     };
 
+    // Age from a birthdate to an end date (default today): "3 weeks", "7 months",
+    // "1 year 4 months", "12 years". Returns '' if the birthdate is unusable.
+    function fmtAge(birthIso, endIso = null) {
+      const parse = (iso) => {
+        const [y, m, d] = String(iso || '').split('-').map(Number);
+        return y && m && d ? new Date(y, m - 1, d) : null;
+      };
+      const birth = parse(birthIso);
+      const end = endIso ? parse(endIso) : new Date();
+      if (!birth || !end || end < birth) return '';
+      const days = Math.floor((end - birth) / 86400000);
+      if (days < 14) return `${days} day${days === 1 ? '' : 's'}`;
+      let months = (end.getFullYear() - birth.getFullYear()) * 12 + (end.getMonth() - birth.getMonth());
+      if (end.getDate() < birth.getDate()) months--;
+      if (months < 1) return `${Math.floor(days / 7)} weeks`;
+      if (months < 12) return `${months} month${months === 1 ? '' : 's'}`;
+      const years = Math.floor(months / 12);
+      const rem = months % 12;
+      const y = `${years} year${years === 1 ? '' : 's'}`;
+      return rem ? `${y} ${rem} month${rem === 1 ? '' : 's'}` : y;
+    }
+
     // Imperial weights display as pounds + remainder ounces ("8 lbs 3 oz").
     function fmtWeight(value, unit) {
       const v = Number(value);
@@ -84,6 +106,7 @@
         pet.breed && `Breed: ${pet.breed}`,
         pet.sex && `Sex: ${pet.sex}`,
         pet.birthdate && `Born: ${fmtDate(pet.birthdate)}`,
+        pet.birthdate && `Age: ${fmtAge(pet.birthdate, pet.passed_date || null)}${pet.passed_date ? ' (at passing)' : ''}`,
         pet.passed_date && `Deceased: ${fmtDate(pet.passed_date)}`,
       ].filter(Boolean).map((f) => `<span class="fact">${esc(f)}</span>`).join('');
 

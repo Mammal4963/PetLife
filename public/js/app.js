@@ -22,6 +22,28 @@ function fmtDateRange(start, end) {
   return end && end !== start ? `${fmtDate(start)} – ${fmtDate(end)}` : fmtDate(start);
 }
 
+// Age from a birthdate to an end date (default today): "3 weeks", "7 months",
+// "1 year 4 months", "12 years". Returns '' if the birthdate is unusable.
+function fmtAge(birthIso, endIso = null) {
+  const parse = (iso) => {
+    const [y, m, d] = String(iso || '').split('-').map(Number);
+    return y && m && d ? new Date(y, m - 1, d) : null;
+  };
+  const birth = parse(birthIso);
+  const end = endIso ? parse(endIso) : new Date();
+  if (!birth || !end || end < birth) return '';
+  const days = Math.floor((end - birth) / 86400000);
+  if (days < 14) return `${days} day${days === 1 ? '' : 's'}`;
+  let months = (end.getFullYear() - birth.getFullYear()) * 12 + (end.getMonth() - birth.getMonth());
+  if (end.getDate() < birth.getDate()) months--;
+  if (months < 1) return `${Math.floor(days / 7)} weeks`;
+  if (months < 12) return `${months} month${months === 1 ? '' : 's'}`;
+  const years = Math.floor(months / 12);
+  const rem = months % 12;
+  const y = `${years} year${years === 1 ? '' : 's'}`;
+  return rem ? `${y} ${rem} month${rem === 1 ? '' : 's'}` : y;
+}
+
 // Imperial weights display as pounds + remainder ounces ("8 lbs 3 oz").
 function fmtWeight(value, unit) {
   const v = Number(value);
@@ -548,7 +570,7 @@ async function renderHome() {
     <a class="pet-tile ${p.passed_date ? 'memorial' : ''}" href="#/pet/${p.id}">
       ${petAvatar(p, 'lg')}
       <strong>${esc(p.name)}</strong>
-      ${p.passed_date ? `<small>In loving memory</small>` : ''}
+      ${p.passed_date ? `<small>In loving memory</small>` : p.birthdate ? `<small>${fmtAge(p.birthdate)}</small>` : ''}
     </a>`).join('');
 
   const reminderItems = reminders.length ? reminders.map((r) => `
@@ -649,7 +671,7 @@ async function renderPets() {
               <h3>${esc(p.name)}</h3>
               <p class="muted">${esc([p.sex, p.breed || p.species].filter(Boolean).join(' · '))}</p>
               ${p.passed_date ? `<p class="memorial-note">🌈 ${fmtDate(p.passed_date)} — forever loved</p>`
-                : p.birthdate ? `<p class="muted">Born ${fmtDate(p.birthdate)}</p>` : ''}
+                : p.birthdate ? `<p class="muted">${fmtAge(p.birthdate)} old · born ${fmtDate(p.birthdate)}</p>` : ''}
             </div>
           </a>`).join('') || '<p class="empty card">No pets yet — add your crew!</p>'}
       </div>
@@ -761,9 +783,9 @@ async function renderPetDetail(id) {
   }
 
   const facts = [
-    pet.birthdate && `🎂 Born ${fmtDate(pet.birthdate)}`,
+    pet.birthdate && `🎂 Born ${fmtDate(pet.birthdate)}${!pet.passed_date ? ` · ${fmtAge(pet.birthdate)} old` : ''}`,
     pet.adopted_date && `🏡 Gotcha day ${fmtDate(pet.adopted_date)}`,
-    pet.passed_date && `🌈 Crossed the rainbow bridge ${fmtDate(pet.passed_date)}`,
+    pet.passed_date && `🌈 Crossed the rainbow bridge ${fmtDate(pet.passed_date)}${pet.birthdate ? ` · lived ${fmtAge(pet.birthdate, pet.passed_date)}` : ''}`,
     pet.breed && `🧬 ${pet.breed}`,
     pet.sex && (pet.sex === 'male' ? '♂ Male' : '♀ Female'),
   ].filter(Boolean).map((f) => `<span class="fact">${esc(f)}</span>`).join('');
